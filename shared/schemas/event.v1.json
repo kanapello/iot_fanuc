@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://machine-monitor.local/schemas/event.v1.json",
+  "title": "event.v1 - discrete machine event",
+  "description": "Topic: mm/v1/{site}/{machine_id}/event",
+  "allOf": [{ "$ref": "envelope.v1.json" }],
+  "type": "object",
+  "required": ["machine_id"],
+  "properties": {
+    "schema": { "const": "event.v1" },
+    "data": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": [
+            "alarm_raised",
+            "alarm_cleared",
+            "connection_lost",
+            "connection_restored",
+            "program_changed"
+          ]
+        },
+        "code": { "type": ["string", "null"], "maxLength": 32 },
+        "message": { "type": ["string", "null"], "maxLength": 512 },
+        "category": { "type": ["string", "null"], "maxLength": 32 }
+      }
+    }
+  }
+}

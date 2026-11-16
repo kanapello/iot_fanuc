@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://machine-monitor.local/schemas/telemetry.v1.json",
+  "title": "telemetry.v1 - snapshot of machine signals",
+  "description": "Topic: mm/v1/{site}/{machine_id}/telemetry. A signal is null when the control does not support it or the machine is not connected.",
+  "allOf": [{ "$ref": "envelope.v1.json" }],
+  "type": "object",
+  "required": ["machine_id"],
+  "properties": {
+    "schema": { "const": "telemetry.v1" },
+    "data": {
+      "type": "object",
+      "required": ["connected"],
+      "additionalProperties": false,
+      "properties": {
+        "connected": { "type": "boolean" },
+        "mode": {
+          "description": "Operation mode as reported by the control (MEM, MDI, EDIT, JOG, HND, REF, RMT, ...)",
+          "type": ["string", "null"],
+          "maxLength": 16
+        },
+        "run": {
+          "description": "Automatic operation status",
+          "enum": ["RESET", "STOP", "HOLD", "START", "MSTR", null]
+        },
+        "motion": { "type": ["boolean", "null"] },
+        "emergency": { "type": ["boolean", "null"] },
+        "alarm": { "type": ["boolean", "null"] },
+        "program": { "type": ["string", "null"], "maxLength": 64 },
+        "program_name": { "type": ["string", "null"], "maxLength": 128 },
+        "feed_actual": { "type": ["number", "null"] },
+        "spindle_speed": { "type": ["number", "null"] },
+        "spindle_load": { "type": ["number", "null"] },
+        "feed_override": { "type": ["number", "null"] },
+        "spindle_override": { "type": ["number", "null"] },
+        "part_count": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

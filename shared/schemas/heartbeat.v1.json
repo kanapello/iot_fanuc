@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://machine-monitor.local/schemas/heartbeat.v1.json",
+  "title": "heartbeat.v1 - collector heartbeat",
+  "description": "Topic: mm/v1/{site}/collector/{collector_id}/heartbeat (retain=true)",
+  "allOf": [{ "$ref": "envelope.v1.json" }],
+  "type": "object",
+  "properties": {
+    "schema": { "const": "heartbeat.v1" },
+    "data": {
+      "type": "object",
+      "required": ["version", "uptime_s"],
+      "properties": {
+        "version": { "type": "string", "maxLength": 64 },
+        "uptime_s": { "type": "number", "minimum": 0 },
+        "buffer_size": { "type": "integer", "minimum": 0 },
+        "machines": {
+          "description": "machine_id -> connected",
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
