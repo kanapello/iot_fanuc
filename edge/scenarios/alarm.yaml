@@ -1,0 +1,12 @@
+name: alarm
+description: Авария серво во время работы, затем аварийный останов и восстановление.
+loop: true
+program: O3100
+initial_part_count: 42
+steps:
+  - { state: run, duration_s: 180, program: O3100, cycle_time_s: 60, spindle_speed: 6000, feed: 1000 }
+  - { state: alarm, duration_s: 90, alarm: { code: SV0401, message: "V-READY OFF", category: servo } }
+  - { state: idle, duration_s: 30 }
+  - { state: run, duration_s: 240, cycle_time_s: 60, spindle_speed: 6000, feed: 1000 }
+  - { state: alarm, duration_s: 45, emergency: true, alarm: { code: EX1000, message: "EMERGENCY STOP", category: external } }
+  - { state: idle, duration_s: 60 }

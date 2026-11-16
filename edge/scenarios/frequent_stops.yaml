@@ -1,0 +1,14 @@
+name: frequent_stops
+description: Частые простои — короткие серии, длинные остановки (в т.ч. дольше порога IDLE→STOP).
+loop: true
+program: O2001
+initial_part_count: 320
+steps:
+  - { state: run, duration_s: 120, program: O2001, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
+  - { state: idle, duration_s: 45 }
+  - { state: run, duration_s: 90, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
+  - { state: idle, duration_s: 200 }
+  - { state: run, duration_s: 60, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
+  - { state: hold, duration_s: 20 }
+  - { state: run, duration_s: 60, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
+  - { state: idle, duration_s: 320 }

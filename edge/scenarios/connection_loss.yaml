@@ -1,0 +1,12 @@
+name: connection_loss
+description: Обрыв связи со стойкой (станок недоступен по сети), затем восстановление.
+loop: true
+program: O4000
+initial_part_count: 900
+steps:
+  - { state: run, duration_s: 200, program: O4000, cycle_time_s: 40, spindle_speed: 7000, feed: 1100 }
+  - { state: offline, duration_s: 75 }
+  - { state: run, duration_s: 200, cycle_time_s: 40, spindle_speed: 7000, feed: 1100 }
+  - { state: idle, duration_s: 30 }
+  - { state: offline, duration_s: 20 }
+  - { state: idle, duration_s: 30 }
