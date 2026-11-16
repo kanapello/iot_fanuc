@@ -37,7 +37,8 @@ class Step(BaseModel):
     state: StepState
     duration_s: float = Field(default=0.0, ge=0)
     program: str | None = None  # program loaded from this step on
-    cycle_time_s: float = Field(default=60.0, gt=0)
+    cycle_time_s: float = Field(default=60.0, gt=0)  # machining time of one cycle
+    load_time_s: float = Field(default=0.0, ge=0)  # part change after each cycle (machine stopped)
     parts_per_cycle: int = Field(default=1, ge=0)
     spindle_speed: float = 6000.0
     feed: float = 1000.0
@@ -86,9 +87,26 @@ def load_scenario(name: str, scenarios_dir: str | Path | None = None) -> Scenari
 
 
 def _parts(step: Step, elapsed_s: float) -> int:
+    """Parts finished ``elapsed_s`` into a run step (a part is counted when its cycle ends)."""
     if step.state != "run":
         return 0
-    return int(elapsed_s // step.cycle_time_s) * step.parts_per_cycle
+    full, pos = divmod(elapsed_s, step.cycle_time_s + step.load_time_s)
+    done = int(full) + (1 if step.load_time_s > 0 and pos >= step.cycle_time_s else 0)
+    return done * step.parts_per_cycle
+
+
+AUT_CODES = {"MDI": 0, "MEM": 1, "EDIT": 3, "HND": 4, "JOG": 5, "REF": 9, "RMT": 10}
+RUN_CODES = {"RESET": 0, "STOP": 1, "HOLD": 2, "START": 3, "MSTR": 4}
+
+
+def _with_codes(snapshot: MachineSnapshot) -> MachineSnapshot:
+    return replace(
+        snapshot,
+        aut_code=AUT_CODES.get(snapshot.mode or ""),
+        run_code=RUN_CODES.get(snapshot.run or ""),
+        alarm_code=1 if snapshot.alarm else 0,
+        emergency_code=1 if snapshot.emergency else 0,
+    )
 
 
 class SimulatorDriver:
@@ -127,8 +145,8 @@ class SimulatorDriver:
     def scenario_time(self) -> float:
         return (self._clock() - self._t0) * self._time_scale + self._offset_s
 
-    def _locate(self) -> tuple[Step, float, int, str]:
-        """Return (active step, scenario time, part count, loaded program)."""
+    def _locate(self) -> tuple[Step, float, int, str, float]:
+        """Return (active step, scenario time, part count, loaded program, time into the step)."""
         scenario = self._scenario
         t = max(0.0, self.scenario_time())
         total = scenario.total_duration_s
@@ -153,13 +171,16 @@ class SimulatorDriver:
             is_last = step is timed[-1]
             if rem < step.duration_s or is_last:
                 elapsed = min(rem, step.duration_s)
-                return step, t, count + _parts(step, elapsed), program
+                return step, t, count + _parts(step, elapsed), program, elapsed
             count += _parts(step, step.duration_s)
             rem -= step.duration_s
         raise AssertionError("unreachable: scenario has a timed step")
 
     def read_snapshot(self) -> MachineSnapshot:
-        step, t, count, program = self._locate()
+        return _with_codes(self._read())
+
+    def _read(self) -> MachineSnapshot:
+        step, t, count, program, elapsed = self._locate()
         if step.state == "offline":
             raise DriverConnectionError("simulated machine is unreachable")
 
@@ -176,6 +197,8 @@ class SimulatorDriver:
             spindle_speed=0.0,
             spindle_load=0.0,
         )
+        if step.state == "run" and elapsed % (step.cycle_time_s + step.load_time_s) >= step.cycle_time_s:
+            return replace(base, mode=step.mode or "MEM", run="STOP")  # part change between cycles
         if step.state == "run":
             load = round((step.spindle_load + 5.0 * math.sin(t / 3.0)) * 2) / 2
             feed = round(step.feed * (1.0 + 0.02 * math.sin(t / 2.0)) / 10) * 10

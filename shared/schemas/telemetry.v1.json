@@ -23,6 +23,22 @@
           "description": "Automatic operation status",
           "enum": ["RESET", "STOP", "HOLD", "START", "MSTR", null]
         },
+        "aut_code": {
+          "description": "Raw operation mode code from the control (FOCAS statinfo.aut)",
+          "type": ["integer", "null"]
+        },
+        "run_code": {
+          "description": "Raw automatic operation status code (FOCAS statinfo.run)",
+          "type": ["integer", "null"]
+        },
+        "alarm_code": {
+          "description": "Raw alarm status code (FOCAS statinfo.alarm); alarm = (alarm_code == 1)",
+          "type": ["integer", "null"]
+        },
+        "emergency_code": {
+          "description": "Raw emergency status code (FOCAS statinfo.emergency); emergency = (emergency_code == 1)",
+          "type": ["integer", "null"]
+        },
         "motion": { "type": ["boolean", "null"] },
         "emergency": { "type": ["boolean", "null"] },
         "alarm": { "type": ["boolean", "null"] },

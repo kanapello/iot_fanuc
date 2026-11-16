@@ -12,13 +12,13 @@
 #pragma pack(push, 4)
 typedef struct { short hdck, tmmode, aut, run, motion, mstb, emergency, alarm, edit; } ODBST;
 typedef struct { short dummy[2]; short data; short mdata; } ODBPRO;
-typedef struct { char name[36]; long o_num; } ODBEXEPRG;
-typedef struct { short dummy[2]; long data; } ODBACT;
-typedef struct { long data; short dec; short unit; char name; char suff1; char suff2; char reserve; } LOADELM;
+typedef struct { char name[36]; int o_num; } ODBEXEPRG;
+typedef struct { short dummy[2]; int data; } ODBACT;
+typedef struct { int data; short dec; short unit; char name; char suff1; char suff2; char reserve; } LOADELM;
 typedef struct { LOADELM spload; LOADELM spspeed; } ODBSPLOAD;
-typedef struct { short datano; short dummy; long mcr_val; short dec_val; } ODBM;
-typedef struct { short datano; short type; long ldata; } IODBPSD;
-typedef struct { long alm_no; short type; short axis; short dummy; short msg_len; char alm_msg[64]; } ODBALMMSG2;
+typedef struct { short datano; short dummy; int mcr_val; short dec_val; } ODBM;
+typedef struct { short datano; short type; int ldata; } IODBPSD;
+typedef struct { int alm_no; short type; short axis; short dummy; short msg_len; char alm_msg[64]; } ODBALMMSG2;
 #pragma pack(pop)
 
 #define EW_OK 0
@@ -29,10 +29,10 @@ typedef struct { long alm_no; short type; short axis; short dummy; short msg_len
 
 static int mode = 0;
 
-short cnc_startupprocess(long level, const char *filename) { (void)level; (void)filename; return EW_OK; }
+short cnc_startupprocess(int level, const char *filename) { (void)level; (void)filename; return EW_OK; }
 short cnc_exitprocess(void) { return EW_OK; }
 
-short cnc_allclibhndl3(const char *ip, unsigned short port, long timeout, unsigned short *h) {
+short cnc_allclibhndl3(const char *ip, unsigned short port, int timeout, unsigned short *h) {
     (void)timeout;
     if (port != 8193) return EW_SOCKET;
     if (strcmp(ip, "10.0.0.1") == 0) mode = 1;

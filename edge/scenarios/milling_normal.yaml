@@ -1,12 +1,16 @@
 name: milling_normal
-description: Нормальная работа — серия циклов с короткими паузами на смену заготовки.
+description: Нормальная работа — две программы, короткие паузы, редкая переналадка.
 loop: true
 program: O1234
 initial_part_count: 15800
 steps:
-  - { state: run, duration_s: 540, program: O1234, cycle_time_s: 45, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
-  - { state: idle, duration_s: 40 }
-  - { state: run, duration_s: 540, cycle_time_s: 45, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
-  - { state: hold, duration_s: 15 }
-  - { state: run, duration_s: 270, cycle_time_s: 45, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
-  - { state: idle, duration_s: 60 }
+  - { state: run, duration_s: 1100, program: O1234, cycle_time_s: 45, load_time_s: 10, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
+  - { state: idle, duration_s: 50 }
+  - { state: run, duration_s: 1650, program: O1234, cycle_time_s: 45, load_time_s: 10, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
+  - { state: hold, duration_s: 20 }
+  - { state: run, duration_s: 825, program: O1234, cycle_time_s: 45, load_time_s: 10, spindle_speed: 8000, feed: 1250, spindle_load: 37 }
+  - { state: setup, duration_s: 240, mode: JOG, program: O1250 }
+  - { state: run, duration_s: 2100, program: O1250, cycle_time_s: 90, load_time_s: 15, spindle_speed: 5200, feed: 900, spindle_load: 48 }
+  - { state: idle, duration_s: 90 }
+  - { state: run, duration_s: 1575, program: O1250, cycle_time_s: 90, load_time_s: 15, spindle_speed: 5200, feed: 900, spindle_load: 48 }
+  - { state: setup, duration_s: 200, mode: EDIT, program: O1234 }

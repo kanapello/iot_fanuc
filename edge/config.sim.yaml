@@ -1,4 +1,4 @@
-# Simulator-only collector used by `make up` (compose profile "dev"): 5 machines.
+# Simulator-only collector used by `make up` (compose profile "dev"): 6 machines.
 site: plant1
 collector_id: edge-sim
 mqtt:
@@ -6,9 +6,12 @@ mqtt:
   port: 1883
   username: edge
   password_env: MM_MQTT_PASSWORD
+buffer:
+  path: /app/data/buffer.db
 machines:
-  - { id: sim01, name: "Симулятор 01 (норма)", driver: simulator, profile: milling_normal }
-  - { id: sim02, name: "Симулятор 02 (простои)", driver: simulator, profile: frequent_stops, offset_s: 60 }
-  - { id: sim03, name: "Симулятор 03 (аварии)", driver: simulator, profile: alarm, offset_s: 100 }
-  - { id: sim04, name: "Симулятор 04 (обрыв связи)", driver: simulator, profile: connection_loss, offset_s: 150 }
-  - { id: sim05, name: "Симулятор 05 (переналадка)", driver: simulator, profile: program_change, offset_s: 200 }
+  - { id: sim01, driver: simulator, profile: milling_normal }
+  - { id: sim02, driver: simulator, profile: frequent_stops, offset_s: 300 }
+  - { id: sim03, driver: simulator, profile: alarm, offset_s: 500 }
+  - { id: sim04, driver: simulator, profile: connection_loss, offset_s: 700 }
+  - { id: sim05, driver: simulator, profile: program_change, offset_s: 200 }
+  - { id: sim06, driver: simulator, profile: counter_reset, offset_s: 100 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -34,31 +35,42 @@ class OutgoingMessage:
     topic: str
     payload: bytes
     retain: bool = False
+    buffered: bool = True  # False: best effort, not stored in the buffer (heartbeat)
+
+
+class _Counter:
+    def __init__(self, first: int = 1) -> None:
+        self._next = first
+
+    def __call__(self) -> int:
+        value = self._next
+        self._next += 1
+        return value
 
 
 class MessageFactory:
-    """Creates envelopes for one machine; owns its ``seq`` counter.
+    """Creates envelopes for one machine.
 
-    The counter is shared by telemetry and events of the machine. It lives in
-    memory for now; it becomes persistent together with the SQLite buffer.
+    ``next_seq`` supplies the per-machine counter shared by telemetry and
+    events; the collector passes the persistent counter of the SQLite buffer.
     """
 
-    def __init__(self, site: str, collector_id: str, machine_id: str, first_seq: int = 1) -> None:
+    def __init__(
+        self, site: str, collector_id: str, machine_id: str, next_seq: Callable[[], int] | None = None
+    ) -> None:
         self._site = site
         self._collector_id = collector_id
         self._machine_id = machine_id
-        self._next_seq = first_seq
+        self._next_seq = next_seq or _Counter()
 
     def _envelope(self, schema: str, kind: str, ts: datetime, data: dict[str, Any]) -> OutgoingMessage:
-        seq = self._next_seq
-        self._next_seq += 1
         body = {
             "schema": schema,
             "msg_id": uuid7(),
             "collector_id": self._collector_id,
             "machine_id": self._machine_id,
             "ts": format_ts(ts),
-            "seq": seq,
+            "seq": self._next_seq(),
             "data": data,
         }
         topic = f"{TOPIC_PREFIX}/{self._site}/{self._machine_id}/{kind}"
@@ -71,3 +83,16 @@ class MessageFactory:
         data: dict[str, Any] = {"type": event_type}
         data.update({k: v for k, v in fields.items() if v is not None})
         return self._envelope("event.v1", "event", ts, data)
+
+
+def heartbeat(site: str, collector_id: str, ts: datetime, seq: int, data: dict[str, Any]) -> OutgoingMessage:
+    body = {
+        "schema": "heartbeat.v1",
+        "msg_id": uuid7(),
+        "collector_id": collector_id,
+        "ts": format_ts(ts),
+        "seq": seq,
+        "data": data,
+    }
+    topic = f"{TOPIC_PREFIX}/{site}/collector/{collector_id}/heartbeat"
+    return OutgoingMessage(topic, json.dumps(body, separators=(",", ":")).encode(), retain=True, buffered=False)

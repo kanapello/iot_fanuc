@@ -19,6 +19,10 @@ class MachineSnapshot:
     """All signals of one poll. ``None`` = signal not supported / not available."""
 
     mode: str | None = None
+    aut_code: int | None = None
+    run_code: int | None = None
+    alarm_code: int | None = None  # alarm = (alarm_code == 1)
+    emergency_code: int | None = None  # emergency = (emergency_code == 1)
     run: str | None = None  # RESET | STOP | HOLD | START | MSTR
     motion: bool | None = None
     emergency: bool | None = None

@@ -153,16 +153,16 @@ class ODBPRO(_Struct):
 
 
 class ODBEXEPRG(_Struct):
-    _fields_ = [("name", ctypes.c_char * 36), ("o_num", ctypes.c_long)]
+    _fields_ = [("name", ctypes.c_char * 36), ("o_num", ctypes.c_int32)]
 
 
 class ODBACT(_Struct):
-    _fields_ = [("dummy", ctypes.c_short * 2), ("data", ctypes.c_long)]
+    _fields_ = [("dummy", ctypes.c_short * 2), ("data", ctypes.c_int32)]
 
 
 class LOADELM(_Struct):
     _fields_ = [
-        ("data", ctypes.c_long),
+        ("data", ctypes.c_int32),
         ("dec", ctypes.c_short),
         ("unit", ctypes.c_short),
         ("name", ctypes.c_char),
@@ -180,7 +180,7 @@ class ODBM(_Struct):
     _fields_ = [
         ("datano", ctypes.c_short),
         ("dummy", ctypes.c_short),
-        ("mcr_val", ctypes.c_long),
+        ("mcr_val", ctypes.c_int32),
         ("dec_val", ctypes.c_short),
     ]
 
@@ -191,14 +191,14 @@ class IODBPSD(_Struct):
     _fields_ = [
         ("datano", ctypes.c_short),
         ("type", ctypes.c_short),
-        ("ldata", ctypes.c_long),
+        ("ldata", ctypes.c_int32),
         ("_pad", ctypes.c_char * 32),
     ]
 
 
 class ODBALMMSG2(_Struct):
     _fields_ = [
-        ("alm_no", ctypes.c_long),
+        ("alm_no", ctypes.c_int32),
         ("type", ctypes.c_short),
         ("axis", ctypes.c_short),
         ("dummy", ctypes.c_short),
@@ -278,7 +278,7 @@ class FocasProbe:
         if func is None:
             return
         func.restype = ctypes.c_short
-        func.argtypes = [ctypes.c_long, ctypes.c_char_p]
+        func.argtypes = [ctypes.c_int32, ctypes.c_char_p]
         self._check("cnc_startupprocess", func(0, log_path.encode()))
 
     def shutdown(self) -> None:
@@ -293,7 +293,7 @@ class FocasProbe:
         func.argtypes = [
             ctypes.c_char_p,
             ctypes.c_ushort,
-            ctypes.c_long,
+            ctypes.c_int32,
             ctypes.POINTER(ctypes.c_ushort),
         ]
         self._check("cnc_allclibhndl3", func(ip.encode("ascii"), port, timeout_s, ctypes.byref(self.handle)))
@@ -367,7 +367,7 @@ class FocasProbe:
             "cnc_rdparam",
             ctypes.c_short(number),
             ctypes.c_short(0),
-            ctypes.c_short(4 + ctypes.sizeof(ctypes.c_long)),
+            ctypes.c_short(4 + ctypes.sizeof(ctypes.c_int32)),
             ctypes.byref(buf),
         )
         return int(buf.ldata)

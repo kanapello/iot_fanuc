@@ -6,10 +6,13 @@ import argparse
 import logging
 import signal
 import threading
+from functools import partial
 
+from collector.buffer import Buffer
 from collector.config import CollectorConfig, FanucFocasMachine, MachineConfig, load_config
 from collector.drivers.base import MachineDriver
 from collector.drivers.simulator import SimulatorDriver, load_scenario
+from collector.health import run_heartbeat
 from collector.messages import MessageFactory
 from collector.poller import MachinePoller
 from collector.publisher import MqttPublisher
@@ -19,18 +22,23 @@ log = logging.getLogger("collector")
 
 def build_driver(config: CollectorConfig, machine: MachineConfig) -> MachineDriver:
     if isinstance(machine, FanucFocasMachine):
-        raise NotImplementedError("driver 'fanuc_focas' is delivered in stage 2; use tools/focas_probe.py for now")
+        if config.focas is None:
+            raise ValueError("config section 'focas.library_path' is required for fanuc_focas machines")
+        from collector.drivers.fanuc_focas import FanucFocasDriver
+
+        return FanucFocasDriver(config.focas.library_path, machine.ip, machine.port, machine.part_counter)
     scenario = load_scenario(machine.profile, config.scenarios_dir)
     return SimulatorDriver(scenario, offset_s=machine.offset_s, time_scale=machine.time_scale)
 
 
 def run(config: CollectorConfig, stop: threading.Event) -> None:
-    publisher = MqttPublisher(config.mqtt, client_id=config.collector_id)
+    buffer = Buffer(config.buffer.path, config.buffer.max_age_days)
+    publisher = MqttPublisher(config.mqtt, client_id=config.collector_id, buffer=buffer)
     pollers = [
         MachinePoller(
             machine.id,
             build_driver(config, machine),
-            MessageFactory(config.site, config.collector_id, machine.id),
+            MessageFactory(config.site, config.collector_id, machine.id, partial(buffer.next_seq, machine.id)),
             publisher,
             poll_interval_s=machine.poll_interval_ms / 1000,
             keyframe_interval_s=config.keyframe_interval_s,
@@ -39,6 +47,20 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
     ]
     publisher.start()
     threads = [threading.Thread(target=p.run, args=(stop,), name=f"poller-{p.machine_id}") for p in pollers]
+    threads.append(
+        threading.Thread(
+            target=run_heartbeat,
+            args=(
+                config.site,
+                config.collector_id,
+                publisher,
+                buffer,
+                lambda: {p.machine_id: p.connected for p in pollers},
+                stop,
+            ),
+            name="heartbeat",
+        )
+    )
     for thread in threads:
         thread.start()
     log.info("collector %s started with %d machine(s)", config.collector_id, len(pollers))
@@ -46,6 +68,7 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
     for thread in threads:
         thread.join(timeout=5)
     publisher.stop()
+    buffer.close()
     log.info("collector stopped")
 
 

@@ -100,6 +100,20 @@ def test_non_looping_scenario_stays_in_last_step(clock: FakeClock) -> None:
     assert (snap.run, snap.part_count) == ("STOP", 2)
 
 
+def test_cycle_with_part_change_pause(clock: FakeClock) -> None:
+    driver = make([{"state": "run", "duration_s": 100, "cycle_time_s": 8, "load_time_s": 2}], clock)
+    assert driver.read_snapshot().run == "START"
+    clock.advance(7)
+    assert driver.read_snapshot().part_count == 0
+    clock.advance(1.5)  # 8.5 s: cycle finished, machine waits for the next blank
+    snap = driver.read_snapshot()
+    assert (snap.run, snap.run_code, snap.aut_code, snap.alarm_code, snap.part_count) == ("STOP", 1, 1, 0, 1)
+    clock.advance(2)  # 10.5 s: second cycle is running
+    assert (driver.read_snapshot().run, driver.read_snapshot().run_code) == ("START", 3)
+    clock.advance(30)  # 40.5 s: four full periods
+    assert driver.read_snapshot().part_count == 4
+
+
 def test_bundled_scenarios_and_configs_are_valid() -> None:
     names = {p.stem for p in DEFAULT_SCENARIOS_DIR.glob("*.yaml")}
     assert {
@@ -114,7 +128,7 @@ def test_bundled_scenarios_and_configs_are_valid() -> None:
         assert load_scenario(name).name == name
 
     sim = load_config(EDGE_DIR / "config.sim.yaml")
-    assert len(sim.machines) == 5
+    assert 5 <= len(sim.machines) <= 8
     for machine in sim.machines:
         assert machine.driver == "simulator"
         load_scenario(machine.profile)

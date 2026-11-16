@@ -4,11 +4,13 @@ loop: true
 program: O2001
 initial_part_count: 320
 steps:
-  - { state: run, duration_s: 120, program: O2001, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
-  - { state: idle, duration_s: 45 }
-  - { state: run, duration_s: 90, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
-  - { state: idle, duration_s: 200 }
-  - { state: run, duration_s: 60, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
-  - { state: hold, duration_s: 20 }
-  - { state: run, duration_s: 60, cycle_time_s: 30, spindle_speed: 4500, feed: 800 }
-  - { state: idle, duration_s: 320 }
+  - { state: run, duration_s: 380, program: O2001, cycle_time_s: 30, load_time_s: 8, spindle_speed: 4500, feed: 800, spindle_load: 37 }
+  - { state: idle, duration_s: 70 }
+  - { state: run, duration_s: 266, program: O2001, cycle_time_s: 30, load_time_s: 8, spindle_speed: 4500, feed: 800, spindle_load: 37 }
+  - { state: idle, duration_s: 310 }
+  - { state: run, duration_s: 190, program: O2001, cycle_time_s: 30, load_time_s: 8, spindle_speed: 4500, feed: 800, spindle_load: 37 }
+  - { state: hold, duration_s: 25 }
+  - { state: run, duration_s: 228, program: O2001, cycle_time_s: 30, load_time_s: 8, spindle_speed: 4500, feed: 800, spindle_load: 37 }
+  - { state: idle, duration_s: 540 }
+  - { state: run, duration_s: 456, program: O2001, cycle_time_s: 30, load_time_s: 8, spindle_speed: 4500, feed: 800, spindle_load: 37 }
+  - { state: idle, duration_s: 150 }

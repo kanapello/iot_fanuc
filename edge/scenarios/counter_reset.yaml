@@ -4,8 +4,10 @@ loop: true
 program: O5005
 initial_part_count: 9990
 steps:
-  - { state: run, duration_s: 200, program: O5005, cycle_time_s: 20, spindle_speed: 5000, feed: 900 }
-  - { state: idle, duration_s: 30 }
+  - { state: run, duration_s: 780, program: O5005, cycle_time_s: 20, load_time_s: 6, spindle_speed: 5000, feed: 900, spindle_load: 37 }
+  - { state: idle, duration_s: 80 }
   - { state: counter_reset }
-  - { state: run, duration_s: 200, cycle_time_s: 20, spindle_speed: 5000, feed: 900 }
-  - { state: idle, duration_s: 40 }
+  - { state: run, duration_s: 1040, program: O5005, cycle_time_s: 20, load_time_s: 6, spindle_speed: 5000, feed: 900, spindle_load: 37 }
+  - { state: idle, duration_s: 160 }
+  - { state: run, duration_s: 520, program: O5005, cycle_time_s: 20, load_time_s: 6, spindle_speed: 5000, feed: 900, spindle_load: 37 }
+  - { state: idle, duration_s: 30 }

@@ -4,9 +4,10 @@ loop: true
 program: O4000
 initial_part_count: 900
 steps:
-  - { state: run, duration_s: 200, program: O4000, cycle_time_s: 40, spindle_speed: 7000, feed: 1100 }
-  - { state: offline, duration_s: 75 }
-  - { state: run, duration_s: 200, cycle_time_s: 40, spindle_speed: 7000, feed: 1100 }
-  - { state: idle, duration_s: 30 }
-  - { state: offline, duration_s: 20 }
-  - { state: idle, duration_s: 30 }
+  - { state: run, duration_s: 900, program: O4000, cycle_time_s: 40, load_time_s: 10, spindle_speed: 7000, feed: 1100, spindle_load: 37 }
+  - { state: offline, duration_s: 120 }
+  - { state: run, duration_s: 1200, program: O4000, cycle_time_s: 40, load_time_s: 10, spindle_speed: 7000, feed: 1100, spindle_load: 37 }
+  - { state: idle, duration_s: 40 }
+  - { state: offline, duration_s: 25 }
+  - { state: idle, duration_s: 35 }
+  - { state: run, duration_s: 600, program: O4000, cycle_time_s: 40, load_time_s: 10, spindle_speed: 7000, feed: 1100, spindle_load: 37 }
