@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     schemas_dir: Path = _REPO_ROOT / "shared" / "schemas"
 
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Auth (skeleton): one administrator and one shared token for kiosks / TV dashboards.
+    secret_key: str = "change-me-secret"
+    admin_username: str = "admin"
+    admin_password: str = "admin"
+    device_token: str = "change-me-device-token"
+    token_ttl_hours: int = 12
+
+    worker_interval_s: float = 2.0
+    oee_interval_s: float = 10.0
+
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
     mqtt_tls: bool = False

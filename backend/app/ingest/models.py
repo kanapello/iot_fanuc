@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Text, Uuid, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,10 @@ class Telemetry(Base):
     connected: Mapped[bool] = mapped_column(Boolean)
     mode: Mapped[str | None] = mapped_column(Text)
     run: Mapped[str | None] = mapped_column(Text)
+    aut_code: Mapped[int | None] = mapped_column(Integer)
+    run_code: Mapped[int | None] = mapped_column(Integer)
+    alarm_code: Mapped[int | None] = mapped_column(Integer)
+    emergency_code: Mapped[int | None] = mapped_column(Integer)
     motion: Mapped[bool | None] = mapped_column(Boolean)
     emergency: Mapped[bool | None] = mapped_column(Boolean)
     alarm: Mapped[bool | None] = mapped_column(Boolean)

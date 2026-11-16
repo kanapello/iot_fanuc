@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
@@ -13,12 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.admin.service import MachineRef, record_heartbeat, register_discovered
 from app.ingest.contract import MessageValidator, ParsedMessage, Rejected
 from app.ingest.models import IngestReject, MachineEvent, Telemetry
+from app.timeline.service import mark_dirty
 
 log = logging.getLogger(__name__)
 
 _TELEMETRY_SIGNALS = (
     "mode",
     "run",
+    "aut_code",
+    "run_code",
+    "alarm_code",
+    "emergency_code",
     "motion",
     "emergency",
     "alarm",
@@ -119,6 +125,11 @@ class IngestService:
                     insert(Telemetry).values(telemetry).on_conflict_do_nothing(index_elements=["msg_id", "ts"])
                 )
                 telemetry_inserted = result.rowcount  # type: ignore[attr-defined]
+                # ingest derives nothing: it only tells the worker which period changed
+                dirty: dict[str, datetime] = {}
+                for row in telemetry:
+                    dirty[row["machine_id"]] = min(row["ts"], dirty.get(row["machine_id"], row["ts"]))
+                await mark_dirty(session, dirty)
             if events:
                 result = await session.execute(
                     insert(MachineEvent).values(events).on_conflict_do_nothing(index_elements=["msg_id", "ts"])

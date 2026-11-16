@@ -8,8 +8,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,3 +76,44 @@ async def record_heartbeat(
             where=or_(Collector.last_heartbeat.is_(None), Collector.last_heartbeat < stmt.excluded.last_heartbeat),
         )
     )
+
+
+async def list_machines(session: AsyncSession, active_only: bool = True) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        text(
+            "SELECT m.id, m.name, m.site_id, m.area_id, a.name AS area_name, m.controller_type, m.collector_id, "
+            "m.is_active, m.sort_order, s.timezone "
+            "FROM machines m JOIN sites s ON s.id = m.site_id LEFT JOIN areas a ON a.id = m.area_id "
+            "WHERE m.is_active OR NOT :active_only ORDER BY m.sort_order, m.id"
+        ),
+        {"active_only": active_only},
+    )
+    return [dict(r._mapping) for r in rows]
+
+
+async def get_machine(session: AsyncSession, machine_id: str) -> dict[str, Any] | None:
+    return next((m for m in await list_machines(session, active_only=False) if m["id"] == machine_id), None)
+
+
+async def shift_templates(session: AsyncSession, site_id: str) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        text(
+            "SELECT name, start_time, end_time, days_of_week, planned_breaks FROM shift_templates "
+            "WHERE site_id = :site AND is_active ORDER BY start_time"
+        ),
+        {"site": site_id},
+    )
+    return [dict(r._mapping) for r in rows]
+
+
+async def cycle_norms(session: AsyncSession, machine_id: str) -> dict[str, float]:
+    """Seconds per part by program; a machine-specific norm overrides the common one."""
+    rows = await session.execute(
+        text(
+            "SELECT DISTINCT ON (program) program, ideal_cycle_time_s / parts_per_cycle AS seconds_per_part "
+            "FROM programs WHERE machine_id = :m OR machine_id IS NULL "
+            "ORDER BY program, (machine_id IS NULL), valid_from DESC"
+        ),
+        {"m": machine_id},
+    )
+    return {r.program: float(r.seconds_per_part) for r in rows}
