@@ -1,10 +1,9 @@
-# Machine monitor — developer commands. Targets for later stages (gen-client,
-# recalc, edge-build-win) are added together with the code they run.
+# Machine monitor — developer commands.
 
 COMPOSE := docker compose --env-file .env -f deploy/docker-compose.yml $(COMPOSE_EXTRA)
 PROFILES := --profile dev
 
-.PHONY: up down clean logs ps migrate psql test test-backend test-edge lint format
+.PHONY: up down clean logs ps migrate psql recalc test test-backend test-edge lint format
 
 .env:
 	cp .env.example .env
@@ -30,6 +29,9 @@ migrate: .env  ## alembic upgrade head
 
 psql: .env
 	$(COMPOSE) exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+recalc: .env  ## make recalc from=2026-11-16T05:00:00Z [to=<iso>] [m=<machine_id>]
+	$(COMPOSE) run --rm worker python -m app.worker recalc --from "$(from)" $(if $(to),--to "$(to)") $(if $(m),--machine "$(m)")
 
 test: test-backend test-edge
 

@@ -14,6 +14,11 @@ x-backend: &backend
     MM_MQTT_PORT: "1883"
     MM_MQTT_USERNAME: ${MM_MQTT_BACKEND_USER}
     MM_MQTT_PASSWORD: ${MM_MQTT_BACKEND_PASSWORD}
+    MM_REDIS_URL: redis://redis:6379/0
+    MM_SECRET_KEY: ${MM_SECRET_KEY}
+    MM_ADMIN_USERNAME: ${MM_ADMIN_USERNAME}
+    MM_ADMIN_PASSWORD: ${MM_ADMIN_PASSWORD}
+    MM_DEVICE_TOKEN: ${MM_DEVICE_TOKEN}
     MM_LOG_LEVEL: ${MM_LOG_LEVEL:-INFO}
 
 services:
@@ -53,6 +58,16 @@ services:
       timeout: 5s
       retries: 12
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]  # cache only, nothing to persist
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   migrate:
     <<: *backend
     restart: "no"
@@ -80,6 +95,47 @@ services:
       mosquitto:
         condition: service_healthy
 
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as r; r.urlopen('http://localhost:8000/api/v1/health')"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    image: machine-monitor/web:dev
+    restart: unless-stopped
+    ports:
+      - "${MM_WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
   simulator:
     profiles: ["dev"]
     build:
@@ -90,6 +146,8 @@ services:
     command: ["python", "-m", "collector.main", "--config", "/app/config.sim.yaml"]
     environment:
       MM_MQTT_PASSWORD: ${MM_MQTT_EDGE_PASSWORD}
+    volumes:
+      - simulator-data:/app/data
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -99,4 +157,5 @@ services:
 
 volumes:
   db-data:
+  simulator-data:
   mosquitto-data:

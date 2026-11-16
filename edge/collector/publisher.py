@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 from typing import Any, Protocol
 
@@ -34,7 +35,10 @@ class MqttPublisher:
     def __init__(self, config: MqttConfig, client_id: str, buffer: Buffer) -> None:
         self._config = config
         self._buffer = buffer
-        self._lock = threading.Lock()
+        # paho invokes callbacks while holding its own locks, so callbacks never
+        # take ours: they only signal the sender thread, which owns all state.
+        self._acks: queue.SimpleQueue[int] = queue.SimpleQueue()
+        self._reset = threading.Event()
         self._in_flight: dict[int, int] = {}  # mid -> buffer row id
         self._last_sent_id = 0
         self._connected = threading.Event()
@@ -63,9 +67,7 @@ class MqttPublisher:
         if reason_code.is_failure:
             log.error("MQTT connect refused: %s", reason_code)
             return
-        with self._lock:
-            self._in_flight.clear()
-            self._last_sent_id = 0  # resend everything that was never acknowledged
+        self._reset.set()  # resend everything that was never acknowledged
         log.info(
             "MQTT connected to %s:%s, %d message(s) in buffer",
             self._config.host,
@@ -80,11 +82,8 @@ class MqttPublisher:
         log.warning("MQTT disconnected: %s", reason_code)
 
     def _on_publish(self, _client: Any, _userdata: Any, mid: int, _reason_code: Any, _props: Any) -> None:
-        with self._lock:
-            row_id = self._in_flight.pop(mid, None)
-        if row_id is not None:
-            self._buffer.delete(row_id)
-            self._wake.set()
+        self._acks.put(mid)
+        self._wake.set()
 
     def start(self) -> None:
         removed = self._buffer.evict_expired()
@@ -114,13 +113,23 @@ class MqttPublisher:
         while not self._stop.is_set():
             self._wake.wait(timeout=1.0)
             self._wake.clear()
+            if self._reset.is_set():
+                self._reset.clear()
+                self._in_flight.clear()
+                self._last_sent_id = 0
+            while True:
+                try:
+                    row_id = self._in_flight.pop(self._acks.get_nowait(), None)
+                except queue.Empty:
+                    break
+                if row_id is not None:
+                    self._buffer.delete(row_id)
             if not self._connected.is_set():
                 continue
-            with self._lock:
-                free = MAX_IN_FLIGHT - len(self._in_flight)
-                if free <= 0:
-                    continue
-                for row in self._buffer.pending(self._last_sent_id, free):
-                    info = self._client.publish(row.topic, row.payload, qos=1, retain=row.retain)
-                    self._in_flight[info.mid] = row.id
-                    self._last_sent_id = row.id
+            free = MAX_IN_FLIGHT - len(self._in_flight)
+            if free <= 0:
+                continue
+            for row in self._buffer.pending(self._last_sent_id, free):
+                info = self._client.publish(row.topic, row.payload, qos=1, retain=row.retain)
+                self._in_flight[info.mid] = row.id
+                self._last_sent_id = row.id
