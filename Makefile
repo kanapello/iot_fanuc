@@ -33,7 +33,7 @@ psql: .env
 recalc: .env  ## make recalc from=2026-11-16T05:00:00Z [to=<iso>] [m=<machine_id>]
 	$(COMPOSE) run --rm worker python -m app.worker recalc --from "$(from)" $(if $(to),--to "$(to)") $(if $(m),--machine "$(m)")
 
-test: test-backend test-edge
+test: test-backend test-edge test-frontend
 
 test-backend:
 	cd backend && uv run pytest -q
