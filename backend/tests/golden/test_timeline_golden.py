@@ -123,7 +123,20 @@ def test_incremental_rebuild_continues_an_open_stretch() -> None:
 
 
 def test_part_counter_with_reset() -> None:
-    counts = [(0, 100), (10, 100), (20, 101), (30, 103), (40, 0), (50, 0), (60, 1), (70, 2), (80, None), (90, 2)]
+    counts = [
+        (0, 100),
+        (10, 100),
+        (20, 101),
+        (30, 103),
+        (40, 0),
+        (50, 0),
+        (60, 1),
+        (70, 2),
+        (80, None),
+        (90, 2),
+        (100, 500),
+        (110, 501),
+    ]
     data = [Sample(ts=at(t), run="START", mode="MEM", program="O1", part_count=c) for t, c in counts]
     events = part_events(data, prev_count=99)
     assert [((e.ts - T0).total_seconds(), e.delta) for e in events] == [
@@ -133,5 +146,12 @@ def test_part_counter_with_reset() -> None:
         # 103 -> 0 is a reset by the operator: no negative output
         (60, 1),
         (70, 1),
+        (100, 498),  # an upward jump is taken at face value
+        (110, 1),
     ]
-    assert sum(e.delta for e in events) == 6
+    assert sum(e.delta for e in events) == 505
+
+    # counter preset to a large value (or a restarted control): still no phantom output
+    preset = [Sample(ts=at(t), part_count=c) for t, c in [(0, 40), (10, 15800), (20, 15801)]]
+    assert [e.delta for e in part_events(preset, prev_count=31000)] == [15760, 1]
+    assert [e.delta for e in part_events(preset[1:], prev_count=31000)] == [1]

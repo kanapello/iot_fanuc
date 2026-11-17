@@ -55,9 +55,9 @@ class MachinePoller:
         self._connected = False
         self._ever_connected = False
         self._backoff_s = BACKOFF_MIN_S
-        self._next_connect_at = 0.0
+        self._next_connect_at = float("-inf")  # clocks may be negative (replayed history)
         self._last_data: dict[str, Any] | None = None
-        self._last_publish_at = 0.0
+        self._last_publish_at = float("-inf")
         self._last_program: str | None = None
         self._active_alarms: dict[str, Alarm] = {}
 

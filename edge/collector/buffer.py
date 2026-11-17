@@ -57,6 +57,11 @@ class Buffer:
             ).fetchone()
         return int(row[0])
 
+    def has_seq(self, key: str) -> bool:
+        """True if this source has ever produced a message (i.e. it is not the first start)."""
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM seq WHERE key = ?", (key,)).fetchone() is not None
+
     def add(self, topic: str, payload: bytes, retain: bool = False) -> int:
         with self._lock:
             cursor = self._db.execute(

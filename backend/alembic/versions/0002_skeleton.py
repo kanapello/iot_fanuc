@@ -194,10 +194,11 @@ INSERT INTO scrap_reasons (code, name) VALUES
     ('SIZE', 'Размер не в допуске'), ('SURFACE', 'Дефект поверхности'),
     ('MATERIAL', 'Дефект заготовки'), ('SETUP', 'Наладочный брак');
 
--- Cycle norms (seconds per part) for the simulator programs; machine_id NULL = any machine.
+-- Cycle norms: ideal machining seconds per part, a little below the simulated cycle time
+-- (part change pauses reduce availability, not performance); machine_id NULL = any machine.
 INSERT INTO programs (machine_id, program, ideal_cycle_time_s, parts_per_cycle) VALUES
-    (NULL, 'O1234', 52, 1), (NULL, 'O1250', 100, 1), (NULL, 'O2001', 36, 1), (NULL, 'O3100', 70, 1),
-    (NULL, 'O4000', 48, 1), (NULL, 'O5005', 25, 1), (NULL, 'O6001', 48, 1), (NULL, 'O6002', 85, 1);
+    (NULL, 'O1234', 42, 1), (NULL, 'O1250', 85, 1), (NULL, 'O2001', 28, 1), (NULL, 'O3100', 56, 1),
+    (NULL, 'O4000', 37, 1), (NULL, 'O5005', 19, 1), (NULL, 'O6001', 38, 1), (NULL, 'O6002', 70, 1);
 """
 
 

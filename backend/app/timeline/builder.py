@@ -196,8 +196,8 @@ def build_intervals(
 def part_events(samples: Sequence[Sample], prev_count: int | None) -> list[PartEvent]:
     """Parts produced, from increments of the machine part counter.
 
-    A decreasing counter is a reset by the operator, never negative output:
-    the new value is what was made since the reset.
+    A decreasing counter is a reset (or preset) by the operator, never negative
+    output: counting simply restarts from the new value.
     """
     events: list[PartEvent] = []
     last = prev_count
@@ -205,9 +205,7 @@ def part_events(samples: Sequence[Sample], prev_count: int | None) -> list[PartE
         count = sample.part_count
         if count is None:
             continue
-        if last is not None and count != last:
-            delta = count - last if count > last else count
-            if delta > 0:
-                events.append(PartEvent(sample.ts, sample.program, delta))
+        if last is not None and count > last:
+            events.append(PartEvent(sample.ts, sample.program, count - last))
         last = count
     return events

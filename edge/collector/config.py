@@ -58,6 +58,9 @@ class SimulatorMachine(_MachineBase):
     profile: str = "milling_normal"
     offset_s: float = 0.0
     time_scale: float = Field(default=1.0, gt=0)
+    # Demo history: on the very first start replay this many past hours with historical timestamps.
+    backfill_hours: float = Field(default=0.0, ge=0, le=72)
+    backfill_step_s: float = Field(default=5.0, gt=0)
 
 
 MachineConfig = Annotated[FanucFocasMachine | SimulatorMachine, Field(discriminator="driver")]
