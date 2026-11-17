@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.admin import identity, journal
 from app.admin import service as admin
-from app.api.main import app, ws_live
-from app.api.routes import router as api_router
+from app.api.main import API_ROUTERS, app, ws_live
 from app.core.config import Settings
 from app.core.security import hash_token
+from app.geometry import service as geometry
 from app.worker.__main__ import Worker
 from app.worker.live import live_channel, live_key
 from tests.conftest import Seed, put_samples, seed_reference
@@ -140,6 +140,25 @@ async def world(session_factory: Factory) -> World:
             ("rules", "state_rules"),
         ]:
             world.ids[f"{name}_a"] = await first(f"SELECT min(id) FROM {table} WHERE org_id = :o", o=org)
+
+        # geometric accuracy of organization A: a ballbar test with a file and points, tolerances, a collision
+        await session.execute(text("UPDATE machines SET model = 'Shared VF-500' WHERE id = :m"), {"m": a1.machine_id})
+        test_in = geometry.TestIn(
+            T0, "acme engineer", "XY", 100, 1000, 360, results=[geometry.ResultIn("squareness", 12.0)]
+        )
+        world.ids["ballbar_a"] = await geometry.create_test(session, a1.machine_id, test_in, None)
+        stored = await geometry.add_file(
+            session, world.ids["ballbar_a"], "acme.pdf", b"%PDF-1.4 acme report", None, "acme"
+        )
+        world.ids["ballbar_file_a"] = stored["id"]
+        await geometry.put_trace(session, world.ids["ballbar_a"], "CW", [0.0, 120.0, 240.0], [1.0, -1.0, 0.5], None)
+        world.ids["tolerance_a"] = await geometry.save_tolerance(
+            session, None, a1.machine_id, None, "squareness", None, None, 10.0
+        )
+        world.ids["tolerance_model"] = await geometry.save_tolerance(
+            session, None, None, "Shared VF-500", "squareness", None, None, 15.0
+        )
+        await journal.add_collision(session, a1.machine_id, T0 + timedelta(minutes=5), "acme collision", None)
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
@@ -169,6 +188,7 @@ class Call:
     expect: str  # hidden: 403/404 | empty: 200 without rows | clean: 200 without anything of organization A
     json: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
+    files: dict[str, Any] | None = None
 
 
 def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
@@ -201,6 +221,19 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         "state-rules": {**node, "name": "x", "rules": {}},
     }
     membership = {"role": "operator", "org_id": a.org_id}
+    test = w.ids["ballbar_a"]
+    ballbar = {
+        "performed_at": FROM,
+        "engineer": "x",
+        "plane": "XY",
+        "radius_mm": 100,
+        "feed_mm_min": 1000,
+        "arc_deg": 360,
+    }
+    trace = {"direction": "CCW", "angle_deg": [0, 1, 2], "deviation_um": [0, 0, 0]}
+    setup = {"parameter": "squareness", "plane": "XY", "radius_mm": 100, "feed_mm_min": 1000}
+    machine_tolerance = {"machine_id": m, "parameter": "squareness", "limit_value": 99}
+    model_tolerance = {"machine_model": "Shared VF-500", "parameter": "squareness", "limit_value": 99}
     return {
         ("GET", "/auth/me"): [Call("/auth/me", "clean")],
         ("GET", "/machines"): [Call("/machines", "clean"), Call("/machines", "empty", params={"site_id": a.site_id})],
@@ -261,6 +294,44 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
             Call("/device-tokens", "hidden", json={"name": "x", "area_id": a.area_id}),
         ],
         ("DELETE", "/device-tokens/{token_id}"): [Call(f"/device-tokens/{w.ids['token_kiosk_a']}", "hidden")],
+        # geometric accuracy
+        ("GET", "/geometry/catalog"): [Call("/geometry/catalog", "clean")],
+        ("GET", "/machines/{machine_id}/ballbar/tests"): [Call(f"/machines/{m}/ballbar/tests", "hidden")],
+        ("POST", "/machines/{machine_id}/ballbar/tests"): [
+            Call(f"/machines/{m}/ballbar/tests", "hidden", json=ballbar)
+        ],
+        ("GET", "/ballbar/tests/{test_id}"): [Call(f"/ballbar/tests/{test}", "hidden")],
+        ("PUT", "/ballbar/tests/{test_id}"): [Call(f"/ballbar/tests/{test}", "hidden", json=ballbar)],
+        ("POST", "/ballbar/tests/{test_id}/void"): [
+            Call(f"/ballbar/tests/{test}/void", "hidden", json={"reason": "xyz"})
+        ],
+        ("POST", "/ballbar/tests/{test_id}/files"): [
+            Call(f"/ballbar/tests/{test}/files", "hidden", files={"file": ("x.pdf", b"%PDF-1.4 x")})
+        ],
+        ("GET", "/ballbar/files/{file_id}"): [Call(f"/ballbar/files/{w.ids['ballbar_file_a']}", "hidden")],
+        ("PUT", "/ballbar/tests/{test_id}/traces"): [Call(f"/ballbar/tests/{test}/traces", "hidden", json=trace)],
+        ("GET", "/ballbar/tests/{test_id}/traces"): [Call(f"/ballbar/tests/{test}/traces", "hidden")],
+        ("GET", "/machines/{machine_id}/ballbar/status"): [Call(f"/machines/{m}/ballbar/status", "hidden")],
+        ("GET", "/machines/{machine_id}/ballbar/trend"): [Call(f"/machines/{m}/ballbar/trend", "hidden", params=setup)],
+        ("PUT", "/machines/{machine_id}/ballbar/policy"): [
+            Call(f"/machines/{m}/ballbar/policy", "hidden", json={"interval_days": 1})
+        ],
+        ("POST", "/machines/{machine_id}/collisions"): [Call(f"/machines/{m}/collisions", "hidden", json={})],
+        ("GET", "/machines/{machine_id}/collisions"): [Call(f"/machines/{m}/collisions", "hidden")],
+        ("GET", "/geometry/tolerances"): [Call("/geometry/tolerances", "clean")],
+        ("POST", "/geometry/tolerances"): [
+            Call("/geometry/tolerances", "hidden", json={"machine_id": m, "parameter": "backlash", "limit_value": 1}),
+            Call("/geometry/tolerances", "hidden", json={**model_tolerance, "parameter": "backlash"}),
+        ],
+        ("PUT", "/geometry/tolerances/{tolerance_id}"): [
+            Call(f"/geometry/tolerances/{w.ids['tolerance_a']}", "hidden", json=machine_tolerance),
+            Call(f"/geometry/tolerances/{w.ids['tolerance_model']}", "hidden", json=model_tolerance),
+        ],
+        ("DELETE", "/geometry/tolerances/{tolerance_id}"): [
+            Call(f"/geometry/tolerances/{w.ids['tolerance_a']}", "hidden"),
+            Call(f"/geometry/tolerances/{w.ids['tolerance_model']}", "hidden"),
+        ],
+        ("GET", "/service/worklist"): [Call("/service/worklist", "clean")],
     }
 
 
@@ -280,7 +351,8 @@ async def _fingerprint(factory: Factory) -> dict[str, Any]:
     tables = [
         "organizations", "sites", "areas", "collectors", "machines", "shift_templates", "downtime_reasons",
         "scrap_reasons", "programs", "state_rules", "users", "memberships", "device_tokens", "downtime_annotations",
-        "scrap_records", "operator_setup_marks", "timeline_dirty", "oee_dirty",
+        "scrap_records", "operator_setup_marks", "timeline_dirty", "oee_dirty", "ballbar_tests", "ballbar_results",
+        "ballbar_traces", "ballbar_files", "ballbar_tolerances", "ballbar_policies", "collision_marks",
     ]  # fmt: skip
     async with factory() as session:
         result = {}
@@ -296,8 +368,9 @@ async def test_another_organization_sees_nothing_on_any_route(world: World, sess
     calls = foreign_calls(world)
     api_routes = {
         (method, route.path.removeprefix("/api/v1"))
+        for api_router in API_ROUTERS
         for route in api_router.routes
-        for method in getattr(route, "methods", set()) - {"HEAD", "OPTIONS"}
+        for method in route.methods - {"HEAD", "OPTIONS"}  # type: ignore[attr-defined]
     }
     assert len(api_routes) > 30
     assert api_routes - PUBLIC_ROUTES == set(calls), "every route must be listed in foreign_calls()"
@@ -306,7 +379,7 @@ async def test_another_organization_sees_nothing_on_any_route(world: World, sess
     async with client(world.tokens["admin_b"]) as http:
         for (method, _template), requests in calls.items():
             for call in requests:
-                response = await http.request(method, call.path, json=call.json, params=call.params)
+                response = await http.request(method, call.path, json=call.json, params=call.params, files=call.files)
                 sent = call.params or call.json or ""
                 where = f"{method} {call.path} {sent} -> {response.status_code} {response.text[:200]}"
                 assert MARKER not in response.text, where
@@ -335,7 +408,10 @@ async def test_unauthenticated_requests_are_rejected(world: World) -> None:
         for (method, template), requests in foreign_calls(world).items():
             for token in (None, "garbage", "dev_garbage"):
                 headers = {"Authorization": f"Bearer {token}"} if token else {}
-                response = await http.request(method, requests[0].path, headers=headers, json=requests[0].json)
+                first_call = requests[0]
+                response = await http.request(
+                    method, first_call.path, headers=headers, json=first_call.json, files=first_call.files
+                )
                 assert response.status_code == 401, f"{method} {template}"
 
 

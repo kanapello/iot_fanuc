@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     seq_check_interval_s: float = 60.0
     seq_check_window_hours: int = 24
     collector_offline_after_s: float = 45.0
+    # Largest accepted original file of a ballbar test (.b5r, PDF report), megabytes.
+    geometry_max_file_mb: int = 25
 
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883

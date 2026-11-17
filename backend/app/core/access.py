@@ -22,11 +22,15 @@ REFERENCE_EDIT = "reference.edit"  # shifts, reasons, rules
 STRUCTURE_EDIT = "structure.edit"  # sites, areas, machines, collectors, kiosk tokens
 USERS_MANAGE = "users.manage"  # users and their roles
 COLLECTORS_VIEW = "collectors.view"  # collector health
+GEOMETRY_VIEW = "geometry.view"  # ballbar tests, tolerances, next check, service worklist
+GEOMETRY_EDIT = "geometry.edit"  # enter ballbar tests, upload originals, machine tolerances and check policy
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "operator": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),
-    "master": frozenset({MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW}),
-    "engineer": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW}),
+    "master": frozenset({MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW, GEOMETRY_VIEW}),
+    "engineer": frozenset(
+        {MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW, GEOMETRY_VIEW, GEOMETRY_EDIT}
+    ),
     "admin": frozenset(
         {
             MACHINE_VIEW,
@@ -39,10 +43,13 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             STRUCTURE_EDIT,
             USERS_MANAGE,
             COLLECTORS_VIEW,
+            GEOMETRY_VIEW,
+            GEOMETRY_EDIT,
         }
     ),
-    # employee of the service company: machines, states, alarms and running hours of every customer
-    "service": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, COLLECTORS_VIEW}),
+    # employee of the service company: machines, states, alarms and running hours of every customer;
+    # performs geometric accuracy checks on them (ADR 0005)
+    "service": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, COLLECTORS_VIEW, GEOMETRY_VIEW, GEOMETRY_EDIT}),
     # device tokens
     "kiosk": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),  # operator screen of one machine
     "display": frozenset({MACHINE_VIEW}),  # TV dashboard of one area
@@ -136,6 +143,13 @@ class Scope:
             and g.machine_id is None
             and g.org_id == org_id
             and (site_id is None or g.site_id == site_id)
+            for g in self.grants
+        )
+
+    def global_authority(self, permission: str) -> bool:
+        """Authority over data shared by every organization (e.g. tolerances of a machine model)."""
+        return self.superadmin or any(
+            g.allows(permission) and g.org_id is None and g.machine_id is None and g.area_id is None
             for g in self.grants
         )
 

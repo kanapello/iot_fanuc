@@ -316,3 +316,21 @@ async def setup_active(session: AsyncSession, machine_id: int) -> bool:
         text("SELECT 1 FROM operator_setup_marks WHERE machine_id = :m AND end_ts IS NULL LIMIT 1"), {"m": machine_id}
     )
     return result.first() is not None
+
+
+async def run_seconds_since(session: AsyncSession, since: Mapping[int, datetime], now: datetime) -> dict[int, float]:
+    """Running time (state RUN) of each machine from the given moment up to ``now``."""
+    if not since:
+        return {}
+    rows = await session.execute(
+        text(
+            "SELECT s.machine_id, COALESCE(sum(EXTRACT(EPOCH FROM LEAST(COALESCE(i.end_ts, :now), :now) "
+            "- GREATEST(i.start_ts, s.since))), 0) AS seconds "
+            "FROM unnest(CAST(:machines AS bigint[]), CAST(:since AS timestamptz[])) AS s(machine_id, since) "
+            "LEFT JOIN state_intervals i ON i.machine_id = s.machine_id AND i.state = 'RUN' "
+            "AND COALESCE(i.end_ts, :now) > s.since AND i.start_ts < :now "
+            "GROUP BY s.machine_id"
+        ),
+        {"machines": list(since), "since": list(since.values()), "now": now},
+    )
+    return {r.machine_id: max(0.0, float(r.seconds)) for r in rows}
