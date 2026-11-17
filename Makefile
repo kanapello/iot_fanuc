@@ -3,7 +3,7 @@
 COMPOSE := docker compose --env-file .env -f deploy/docker-compose.yml $(COMPOSE_EXTRA)
 PROFILES := --profile dev
 
-.PHONY: up down clean logs ps migrate psql recalc test test-backend test-edge lint format
+.PHONY: up down clean logs ps migrate psql recalc test test-backend test-edge test-frontend lint format
 
 .env:
 	cp .env.example .env
@@ -41,9 +41,13 @@ test-backend:
 test-edge:
 	cd edge && uv run pytest -q
 
+test-frontend:  ## no unit tests yet: type check only
+	cd frontend && pnpm install --frozen-lockfile && pnpm typecheck
+
 lint:
 	cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy app
 	cd edge && uv run ruff check . && uv run ruff format --check . && uv run mypy collector
+	cd frontend && pnpm install --frozen-lockfile && pnpm typecheck
 
 format:
 	cd backend && uv run ruff format . && uv run ruff check --fix .
