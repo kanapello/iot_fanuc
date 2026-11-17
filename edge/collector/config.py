@@ -29,10 +29,12 @@ class FocasConfig(_Model):
 
 
 class BufferConfig(_Model):
-    """Store-and-forward buffer settings. Parsed already, used from stage 2."""
+    """Store-and-forward buffer settings."""
 
     path: str = "./data/buffer.db"
-    max_age_days: int = 7
+    # Not longer than 7 days: the server compresses telemetry after 30 days and late
+    # data must never reach a compressed chunk (ARCHITECTURE.md 3.6, 5.3).
+    max_age_days: int = Field(default=7, ge=1, le=7)
 
 
 class PartCounterConfig(_Model):

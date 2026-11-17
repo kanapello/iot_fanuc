@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.admin import journal
 from app.admin import service as admin
 from app.oee import service as oee
+from app.oee.calc import NormTable
 from app.timeline import service as timeline
 
 
@@ -38,7 +39,7 @@ async def build_live(session: AsyncSession, machine: dict[str, Any], now: dateti
     shift_payload = None
     shift = await oee.current_shift(session, machine_id, now)
     if shift is not None:
-        norm = (await admin.cycle_norms(session, machine_id)).get(program or "")
+        norm = NormTable(await admin.cycle_norms(session, machine_id)).lookup(program, now)
         shift_payload = {
             "name": shift["shift_name"],
             "start": _iso(shift["period_start"]),

@@ -108,6 +108,7 @@ function useTabs(areas: Row[], reasons: Row[], machines: Row[]): Tab[] {
         { key: "machine_id", label: c.machine, type: "select", options: machineOptions },
         { key: "ideal_cycle_time_s", label: c.cycle, type: "number" },
         { key: "parts_per_cycle", label: c.partsPerCycle, type: "number" },
+        { key: "valid_from", label: c.validFrom, type: "readonly" },
       ],
     },
   ];
@@ -275,7 +276,7 @@ export function AdminPage() {
   const tab = tabs.find((x) => x.key === active) ?? tabs[0];
 
   const recalc = async () => {
-    await api("/admin/recalc?hours=24", { method: "POST" });
+    await api("/recalc?hours=24", { method: "POST" });
     setNotice(t.admin.recalcDone);
   };
 

@@ -19,7 +19,7 @@ from app.ingest.service import IngestService
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 SCHEMAS_DIR = BACKEND_DIR.parent / "shared" / "schemas"
-TIMESCALE_IMAGE = "timescale/timescaledb:latest-pg16"
+TIMESCALE_IMAGE = "timescale/timescaledb:2.32.0-pg16"
 
 
 def make_message(kind: str = "telemetry", **overrides: Any) -> dict[str, Any]:
@@ -100,7 +100,11 @@ async def engine(database_url: str) -> AsyncIterator[AsyncEngine]:
 async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE telemetry, machine_events, ingest_rejects, machines, collectors, areas, sites CASCADE")
+            text(
+                "TRUNCATE telemetry, machine_events, ingest_rejects, machines, collectors, areas, sites, "
+                "state_intervals, part_events, timeline_dirty, oee_dirty, oee_hourly, oee_shift, "
+                "downtime_annotations, scrap_records, operator_setup_marks CASCADE"
+            )
         )
     return create_session_factory(engine)
 
@@ -108,3 +112,80 @@ async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessio
 @pytest.fixture
 def service(session_factory: async_sessionmaker[AsyncSession], validator: MessageValidator) -> IngestService:
     return IngestService(session_factory, validator)
+
+
+DEFAULT_RULES = {
+    "offline_timeout_s": 30,
+    "idle_to_stop_s": 120,
+    "min_interval_s": 5,
+    "run_modes": ["MEM", "RMT", "DNC"],
+    "setup_modes": ["EDIT", "MDI", "JOG", "HND"],
+}
+
+
+async def seed_reference(
+    factory: async_sessionmaker[AsyncSession], machine_id: str = "m1", norm_s: float = 45.0
+) -> dict[str, Any]:
+    """One site (UTC) with a round-the-clock shift, one machine and one cycle norm for program O1."""
+    async with factory() as session, session.begin():
+        await session.execute(text("INSERT INTO sites (id, name, timezone) VALUES ('t1', 'Test site', 'UTC')"))
+        await session.execute(text("INSERT INTO machines (id, site_id, name) VALUES (:m, 't1', :m)"), {"m": machine_id})
+        await session.execute(
+            text(
+                "INSERT INTO shift_templates (site_id, name, start_time, end_time) "
+                "VALUES ('t1', 'Round the clock', '00:00', '00:00')"
+            )
+        )
+        await session.execute(
+            text("INSERT INTO programs (machine_id, program, ideal_cycle_time_s) VALUES (NULL, 'O1', :norm)"),
+            {"norm": norm_s},
+        )
+        await session.execute(
+            text("UPDATE state_rules SET rules = CAST(:rules AS jsonb), version = 1 WHERE id = 1"),
+            {"rules": json.dumps(DEFAULT_RULES)},
+        )
+    from app.admin import service as admin
+
+    async with factory() as session:
+        machine = await admin.get_machine(session, machine_id)
+    assert machine is not None
+    return machine
+
+
+async def put_samples(
+    factory: async_sessionmaker[AsyncSession],
+    machine_id: str,
+    samples: list[dict[str, Any]],
+    received_at: Any = None,
+) -> None:
+    """Insert raw telemetry directly and leave the mark ingest would leave."""
+    from app.timeline.service import mark_dirty
+
+    rows = [
+        {
+            "msg_id": uuid.uuid4(),
+            "machine_id": machine_id,
+            "collector_id": "c1",
+            "seq": i + 1,
+            "connected": True,
+            "mode": "MEM",
+            "run": "STOP",
+            "alarm": False,
+            "emergency": False,
+            "program": "O1",
+            "part_count": None,
+            "received_at": received_at,
+            **sample,
+        }
+        for i, sample in enumerate(samples)
+    ]
+    async with factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO telemetry (msg_id, ts, machine_id, collector_id, seq, connected, mode, run, alarm, "
+                "emergency, program, part_count, received_at) VALUES (:msg_id, :ts, :machine_id, :collector_id, :seq, "
+                ":connected, :mode, :run, :alarm, :emergency, :program, :part_count, COALESCE(:received_at, now()))"
+            ),
+            rows,
+        )
+        await mark_dirty(session, {machine_id: min(r["ts"] for r in rows)})

@@ -7,6 +7,8 @@ Self-hosted платформа мониторинга станков (Fanuc 0i-M
 - Архитектура и этапы: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Правила разработки: [CLAUDE.md](CLAUDE.md)
 - Что сделано в каркасе, что упрощено: [docs/skeleton-report.md](docs/skeleton-report.md)
+- Укрепление ядра данных: [docs/harden-core-report.md](docs/harden-core-report.md)
+- Текущий план работ: [NOW.md](NOW.md)
 - Быстрый старт и команды: [docs/runbooks/dev-quickstart.md](docs/runbooks/dev-quickstart.md)
 
 ## Запуск
@@ -44,7 +46,7 @@ make up
 - дождаться простоя на `sim02` (красный «Простой») — экран оператора сам спросит причину,
   выбор занимает два касания;
 - в аналитике переключить «Текущая смена / Предыдущая смена / Сегодня / Вчера»;
-- в админке изменить норму цикла и нажать «Пересчитать за 24 ч».
+- в админке изменить норму цикла — пересчёт запустится сам.
 
 ![Дашборд](docs/img/skeleton-dashboard.png)
 ![Аналитика](docs/img/skeleton-analytics.png)
