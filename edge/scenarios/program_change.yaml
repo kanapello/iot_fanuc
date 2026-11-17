@@ -1,0 +1,13 @@
+name: program_change
+description: Переналадка — смена программы через режим наладки (EDIT/JOG/MDI), другая норма цикла.
+loop: true
+program: O6001
+initial_part_count: 100
+steps:
+  - { state: run, duration_s: 1000, program: O6001, cycle_time_s: 40, load_time_s: 10, spindle_speed: 6500, feed: 1000, spindle_load: 37 }
+  - { state: setup, duration_s: 120, mode: EDIT, program: O6002 }
+  - { state: setup, duration_s: 260, mode: JOG }
+  - { state: run, duration_s: 1800, program: O6002, cycle_time_s: 75, load_time_s: 15, spindle_speed: 3000, feed: 600, spindle_load: 55 }
+  - { state: idle, duration_s: 70 }
+  - { state: run, duration_s: 900, program: O6002, cycle_time_s: 75, load_time_s: 15, spindle_speed: 3000, feed: 600, spindle_load: 55 }
+  - { state: setup, duration_s: 300, mode: MDI, program: O6001 }

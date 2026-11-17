@@ -1,0 +1,25 @@
+# Example collector config. Copy to config.yaml and adjust.
+site: plant1
+collector_id: edge-shop1
+mqtt:
+  host: mm-server.local
+  port: 8883
+  tls: true
+  username: edge-shop1
+  password_env: MM_MQTT_PASSWORD   # the password itself is taken from this environment variable
+focas:
+  library_path: ./vendor/Fwlib64.dll
+buffer:                            # store-and-forward buffer (used from stage 2)
+  path: ./data/buffer.db
+  max_age_days: 7
+machines:
+  - id: m07
+    name: "Фрезерный 07"
+    driver: fanuc_focas            # FOCAS driver is delivered in stage 2
+    ip: 192.168.10.57
+    port: 8193
+    poll_interval_ms: 1000
+    part_counter: { source: macro, address: 3901 }
+  - id: sim01
+    driver: simulator
+    profile: milling_normal

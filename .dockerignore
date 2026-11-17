@@ -1,0 +1,12 @@
+.git
+.env
+.sandbox
+**/.venv
+**/node_modules
+**/dist
+**/__pycache__
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache
+edge/vendor
+edge/data

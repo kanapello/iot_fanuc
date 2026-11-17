@@ -1,0 +1,161 @@
+# Server stack. Run through the Makefile (`make up`) or:
+#   docker compose --env-file .env -f deploy/docker-compose.yml --profile dev up -d --build
+name: machine-monitor
+
+x-backend: &backend
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+  image: machine-monitor/backend:dev
+  restart: unless-stopped
+  environment: &backend-env
+    MM_DATABASE_URL: postgresql+asyncpg://${MM_DB_USER}:${MM_DB_PASSWORD}@db:5432/${MM_DB_NAME}
+    MM_MQTT_HOST: mosquitto
+    MM_MQTT_PORT: "1883"
+    MM_MQTT_USERNAME: ${MM_MQTT_BACKEND_USER}
+    MM_MQTT_PASSWORD: ${MM_MQTT_BACKEND_PASSWORD}
+    MM_REDIS_URL: redis://redis:6379/0
+    MM_SECRET_KEY: ${MM_SECRET_KEY}
+    MM_ADMIN_USERNAME: ${MM_ADMIN_USERNAME}
+    MM_ADMIN_PASSWORD: ${MM_ADMIN_PASSWORD}
+    MM_DEVICE_TOKEN: ${MM_DEVICE_TOKEN}
+    MM_LOG_LEVEL: ${MM_LOG_LEVEL:-INFO}
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    entrypoint: ["/docker-entrypoint-mm.sh"]
+    environment:
+      MM_MQTT_BACKEND_USER: ${MM_MQTT_BACKEND_USER}
+      MM_MQTT_BACKEND_PASSWORD: ${MM_MQTT_BACKEND_PASSWORD}
+      MM_MQTT_EDGE_USER: ${MM_MQTT_EDGE_USER}
+      MM_MQTT_EDGE_PASSWORD: ${MM_MQTT_EDGE_PASSWORD}
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/docker-entrypoint.sh:/docker-entrypoint-mm.sh:ro
+      - mosquitto-data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u \"$$MM_MQTT_BACKEND_USER\" -P \"$$MM_MQTT_BACKEND_PASSWORD\" -t 'mm/v1/healthcheck' -E -W 3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MM_DB_NAME}
+      POSTGRES_USER: ${MM_DB_USER}
+      POSTGRES_PASSWORD: ${MM_DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]  # cache only, nothing to persist
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ingest:
+    <<: *backend
+    command: ["python", "-m", "app.ingest"]
+    environment:
+      <<: *backend-env
+      MM_INGEST_READY_FILE: /tmp/ingest.ready
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ingest.ready"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as r; r.urlopen('http://localhost:8000/api/v1/health')"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    image: machine-monitor/web:dev
+    restart: unless-stopped
+    ports:
+      - "${MM_WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  simulator:
+    profiles: ["dev"]
+    build:
+      context: ..
+      dockerfile: edge/Dockerfile
+    image: machine-monitor/edge:dev
+    restart: unless-stopped
+    command: ["python", "-m", "collector.main", "--config", "/app/config.sim.yaml"]
+    environment:
+      MM_MQTT_PASSWORD: ${MM_MQTT_EDGE_PASSWORD}
+    volumes:
+      - simulator-data:/app/data
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      # on a clean broker nothing is queued until ingest has subscribed once
+      ingest:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  simulator-data:
+  mosquitto-data:
