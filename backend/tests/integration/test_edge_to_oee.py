@@ -132,12 +132,20 @@ def broker(tmp_path: Path) -> Iterator[Broker]:
 
 
 def _wait_for_port(port: int, timeout_s: float = 30.0) -> None:
+    """The published port accepts TCP before mosquitto listens: wait for a real MQTT connection."""
+    import paho.mqtt.client as mqtt
+    from paho.mqtt.enums import CallbackAPIVersion
+
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=1):
-            return
-        time.sleep(0.2)
-    raise TimeoutError(f"broker did not open port {port}")
+        client = mqtt.Client(CallbackAPIVersion.VERSION2)
+        with contextlib.suppress(OSError):
+            connected = client.connect("127.0.0.1", port, keepalive=5) == 0 and client.loop(timeout=2.0) == 0
+            if connected and client.is_connected():
+                client.disconnect()
+                return
+        time.sleep(0.3)
+    raise TimeoutError(f"broker did not accept connections on port {port}")
 
 
 class Collector:
