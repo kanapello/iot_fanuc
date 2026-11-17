@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -16,12 +17,13 @@ from app.oee.calc import NormTable
 from app.timeline import service as timeline
 
 
-def live_key(machine_id: str) -> str:
+def live_key(machine_id: int) -> str:
     return f"machine:{machine_id}:live"
 
 
-def live_channel(site_id: str) -> str:
-    return f"live.{site_id}"
+def live_channel(org_code: str, site_code: str) -> str:
+    """One Pub/Sub channel per site."""
+    return f"live.{org_code}.{site_code}"
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -39,7 +41,7 @@ async def build_live(session: AsyncSession, machine: dict[str, Any], now: dateti
     shift_payload = None
     shift = await oee.current_shift(session, machine_id, now)
     if shift is not None:
-        norm = NormTable(await admin.cycle_norms(session, machine_id)).lookup(program, now)
+        norm = NormTable(await admin.cycle_norms(session, machine)).lookup(program, now)
         shift_payload = {
             "name": shift["shift_name"],
             "start": _iso(shift["period_start"]),
@@ -56,8 +58,11 @@ async def build_live(session: AsyncSession, machine: dict[str, Any], now: dateti
         }
     return {
         "machine_id": machine_id,
+        "code": machine["code"],
         "name": machine["name"],
+        "org_id": machine["org_id"],
         "site_id": machine["site_id"],
+        "site_name": machine["site_name"],
         "area_id": machine["area_id"],
         "area_name": machine["area_name"],
         "state": (state or {}).get("state", "OFFLINE"),
@@ -77,17 +82,19 @@ async def build_live(session: AsyncSession, machine: dict[str, Any], now: dateti
     }
 
 
-async def publish_live(redis: Redis, payload: dict[str, Any], previous: str | None) -> str:
-    """Store the snapshot; notify subscribers only when something changed."""
+async def publish_live(redis: Redis, machine: dict[str, Any], payload: dict[str, Any], previous: str | None) -> str:
+    """Store the snapshot; notify subscribers of the machine's site only when something changed."""
     encoded = json.dumps(payload, ensure_ascii=False)
-    await redis.set(live_key(payload["machine_id"]), encoded)
+    await redis.set(live_key(machine["id"]), encoded)
     if encoded != previous:
-        await redis.publish(live_channel(payload["site_id"]), encoded)
+        await redis.publish(live_channel(machine["org_code"], machine["site_code"]), encoded)
     return encoded
 
 
-async def read_live(redis: Redis, machine_ids: list[str]) -> dict[str, dict[str, Any]]:
-    if not machine_ids:
+async def read_live(redis: Redis, machine_ids: Collection[int]) -> dict[int, dict[str, Any]]:
+    """Snapshots of ``machine_ids`` (the caller's access scope)."""
+    ids = list(machine_ids)
+    if not ids:
         return {}
-    values = await redis.mget([live_key(m) for m in machine_ids])
-    return {m: json.loads(v) for m, v in zip(machine_ids, values, strict=True) if v}
+    values = await redis.mget([live_key(m) for m in ids])
+    return {m: json.loads(v) for m, v in zip(ids, values, strict=True) if v}

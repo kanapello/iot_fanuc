@@ -26,7 +26,7 @@ class Telemetry(Base):
 
     msg_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    machine_id: Mapped[str] = mapped_column(Text)
+    machine_id: Mapped[int] = mapped_column(BigInteger)
     collector_id: Mapped[str] = mapped_column(Text)
     seq: Mapped[int] = mapped_column(BigInteger)
     connected: Mapped[bool] = mapped_column(Boolean)
@@ -56,7 +56,7 @@ class MachineEvent(Base):
 
     msg_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    machine_id: Mapped[str] = mapped_column(Text)
+    machine_id: Mapped[int] = mapped_column(BigInteger)
     collector_id: Mapped[str] = mapped_column(Text)
     seq: Mapped[int] = mapped_column(BigInteger)
     type: Mapped[str] = mapped_column(Text)

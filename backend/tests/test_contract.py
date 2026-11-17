@@ -14,7 +14,7 @@ def test_valid_telemetry(validator: MessageValidator) -> None:
     body = make_message("telemetry")
     parsed = validator.parse(*encode(body))
     assert isinstance(parsed, ParsedMessage)
-    assert (parsed.kind, parsed.site_id, parsed.machine_id) == ("telemetry", "plant1", "m07")
+    assert (parsed.kind, parsed.org_code, parsed.site_code, parsed.machine_code) == ("telemetry", "torg", "t1", "m1")
     assert parsed.ts == datetime(2026, 11, 16, 19, 1, 2, 345000, tzinfo=UTC)
     assert str(parsed.msg_id) == body["msg_id"]
 
@@ -28,7 +28,7 @@ def test_valid_event_and_heartbeat(validator: MessageValidator) -> None:
     event = validator.parse(*encode(make_message("event")))
     heartbeat = validator.parse(*encode(make_message("heartbeat")))
     assert isinstance(event, ParsedMessage) and event.kind == "event"
-    assert isinstance(heartbeat, ParsedMessage) and heartbeat.machine_id is None
+    assert isinstance(heartbeat, ParsedMessage) and heartbeat.machine_code is None
 
 
 @pytest.mark.parametrize(
@@ -47,30 +47,37 @@ def test_valid_event_and_heartbeat(validator: MessageValidator) -> None:
 )
 def test_invalid_telemetry_is_rejected(validator: MessageValidator, overrides: dict[str, Any], reason: str) -> None:
     body = make_message("telemetry", **overrides)
-    result = validator.parse("mm/v1/plant1/m07/telemetry", json.dumps(body).encode())
+    result = validator.parse("mm/v1/torg/t1/m1/telemetry", json.dumps(body).encode())
     assert isinstance(result, Rejected)
     assert reason in result.reason
 
 
 def test_topic_and_body_must_agree(validator: MessageValidator) -> None:
     body = make_message("telemetry")
-    result = validator.parse("mm/v1/plant1/m08/telemetry", json.dumps(body).encode())
+    result = validator.parse("mm/v1/torg/t1/m08/telemetry", json.dumps(body).encode())
     assert isinstance(result, Rejected) and result.reason == "machine_id does not match topic"
 
     heartbeat = make_message("heartbeat")
-    result = validator.parse("mm/v1/plant1/collector/other/heartbeat", json.dumps(heartbeat).encode())
+    result = validator.parse("mm/v1/torg/t1/collector/other/heartbeat", json.dumps(heartbeat).encode())
     assert isinstance(result, Rejected) and result.reason == "collector_id does not match topic"
 
 
 def test_garbage_is_rejected(validator: MessageValidator) -> None:
     for payload in (b"\xff\xfe", b"not json", b"[1, 2]"):
-        result = validator.parse("mm/v1/plant1/m07/telemetry", payload)
+        result = validator.parse("mm/v1/torg/t1/m1/telemetry", payload)
         assert isinstance(result, Rejected)
-    assert isinstance(validator.parse("mm/v1/plant1/m07/unknown", b"{}"), Rejected)
+    assert isinstance(validator.parse("mm/v1/torg/t1/m1/unknown", b"{}"), Rejected)
+    assert isinstance(validator.parse("mm/v1/t1/m1/telemetry", b"{}"), Rejected)  # topic without organization
 
 
 def test_parse_topic() -> None:
-    assert parse_topic("mm/v2/plant1/m07/telemetry") is None
-    assert parse_topic("mm/v1/plant1//telemetry") is None
-    heartbeat = parse_topic("mm/v1/plant1/collector/edge1/heartbeat")
-    assert heartbeat is not None and heartbeat.collector_id == "edge1"
+    assert parse_topic("mm/v2/torg/t1/m1/telemetry") is None
+    assert parse_topic("mm/v1/torg/t1//telemetry") is None
+    telemetry = parse_topic("mm/v1/torg/t1/m1/telemetry")
+    assert telemetry is not None and (telemetry.org_code, telemetry.site_code, telemetry.machine_code) == (
+        "torg",
+        "t1",
+        "m1",
+    )
+    heartbeat = parse_topic("mm/v1/torg/t1/collector/edge1/heartbeat")
+    assert heartbeat is not None and (heartbeat.site_code, heartbeat.collector_id) == ("t1", "edge1")

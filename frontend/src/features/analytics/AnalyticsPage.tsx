@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
 import { useMemo, useState } from "react";
-import { api, query, type Area, type Interval, type Machine, type OeeRow, type ParetoRow, type Shift } from "../../api/client";
+import { api, query, type Interval, type Machine, type OeeRow, type ParetoRow, type Shift } from "../../api/client";
 import { Chart } from "../../shared/Chart";
 import { t } from "../../shared/i18n";
+import { NodePicker, useMe, useNodeSelection } from "../../shared/session";
 import { formatDuration, formatTime, percent, STATE_COLORS, STATE_ORDER, stateColor, stateLabel } from "../../shared/states";
 
 type Preset = "currentShift" | "previousShift" | "today" | "yesterday";
@@ -34,16 +35,22 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 
 export function AnalyticsPage() {
   const [preset, setPreset] = useState<Preset>("currentShift");
-  const [areaId, setAreaId] = useState("");
+  const { data: me } = useMe();
+  // shift boundaries are a property of a site, so analytics always works on one site
+  const selection = useNodeSelection(me?.sites, { requireSite: true });
+  const { siteId, areaId } = selection;
   const anchor = useMemo(() => new Date(Date.now() - 48 * 3600 * 1000).toISOString(), []);
 
-  const { data: areas } = useQuery({ queryKey: ["areas"], queryFn: () => api<Area[]>("/areas") });
   const { data: machines } = useQuery({ queryKey: ["machines"], queryFn: () => api<Machine[]>("/machines") });
-  const { data: shifts } = useQuery({ queryKey: ["shifts"], queryFn: () => api<Shift[]>(`/shifts${query({ from: anchor })}`) });
+  const { data: shifts } = useQuery({
+    queryKey: ["shifts", siteId],
+    queryFn: () => api<Shift[]>(`/shifts${query({ from: anchor, site_id: siteId })}`),
+    enabled: siteId !== null,
+  });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const range = useMemo(() => resolveRange(preset, shifts), [preset, shifts]);
-  const params = range ? query({ from: range.from, to: range.to, area_id: areaId }) : "";
+  const params = range ? query({ from: range.from, to: range.to, site_id: siteId, area_id: areaId }) : "";
   const enabled = Boolean(range);
   const refetchInterval = 30000;
 
@@ -67,8 +74,8 @@ export function AnalyticsPage() {
   });
 
   const shown = useMemo(
-    () => (machines ?? []).filter((m) => !areaId || String(m.area_id) === areaId),
-    [machines, areaId],
+    () => (machines ?? []).filter((m) => m.site_id === siteId && (!areaId || m.area_id === areaId)),
+    [machines, siteId, areaId],
   );
   const nameOf = useMemo(() => Object.fromEntries(shown.map((m) => [m.id, m.name])), [shown]);
 
@@ -175,7 +182,6 @@ export function AnalyticsPage() {
     };
   }, [paretoRows]);
 
-  const select = "rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm";
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -188,14 +194,7 @@ export function AnalyticsPage() {
             {t.analytics[p]}
           </button>
         ))}
-        <select className={select} value={areaId} onChange={(e) => setAreaId(e.target.value)}>
-          <option value="">{t.common.allAreas}</option>
-          {(areas ?? []).map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
+        {me && <NodePicker sites={me.sites} selection={selection} allowAllSites={false} />}
         {range && (
           <span className="text-sm text-slate-400">
             {new Date(range.from).toLocaleString("ru-RU")} – {new Date(range.to).toLocaleString("ru-RU")}

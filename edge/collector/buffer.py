@@ -3,7 +3,7 @@
 Every message is written here before it is published and removed only after
 the broker acknowledged it (PUBACK). The whole envelope is stored, so a
 resend carries the same ``msg_id`` and ``ts``. The per-machine ``seq``
-counters live in the same database and survive restarts.
+counters and the buffer epoch live in the same database and survive restarts.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,10 @@ CREATE TABLE IF NOT EXISTS messages (
     payload BLOB NOT NULL,
     retain INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS seq (
     key TEXT PRIMARY KEY,
@@ -47,6 +52,10 @@ class Buffer:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.executescript(_SCHEMA)
+        # The epoch is born with the buffer file. If the file is lost, unsent messages and the
+        # seq counters are lost with it; the new epoch tells the server that this happened.
+        self._db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('epoch', ?)", (uuid.uuid4().hex,))
+        self.epoch = str(self._db.execute("SELECT value FROM meta WHERE key = 'epoch'").fetchone()[0])
 
     def next_seq(self, key: str) -> int:
         with self._lock:

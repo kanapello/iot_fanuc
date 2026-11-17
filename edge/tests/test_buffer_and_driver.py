@@ -17,6 +17,7 @@ HERE = Path(__file__).parent
 def test_buffer_keeps_messages_and_seq_across_restart(tmp_path: Path) -> None:
     path = str(tmp_path / "data" / "buffer.db")
     buffer = Buffer(path)
+    epoch = buffer.epoch
     assert [buffer.next_seq("m07"), buffer.next_seq("m07"), buffer.next_seq("m08")] == [1, 2, 1]
     first = buffer.add("t/1", b"one")
     buffer.add("t/2", b"two", retain=True)
@@ -24,11 +25,15 @@ def test_buffer_keeps_messages_and_seq_across_restart(tmp_path: Path) -> None:
     buffer.close()
 
     reopened = Buffer(path)
+    assert reopened.epoch == epoch  # the same buffer file keeps its epoch
     assert reopened.next_seq("m07") == 3
     pending = reopened.pending()
     assert [(m.topic, m.payload, m.retain) for m in pending] == [("t/2", b"two", True)]
     assert reopened.pending(after_id=pending[0].id) == []
     assert reopened.size() == 1
+
+    lost = Buffer(str(tmp_path / "data" / "new-buffer.db"))  # the buffer file was lost and recreated
+    assert lost.epoch != epoch and lost.next_seq("m07") == 1
 
 
 def test_focas_driver_against_fake_library(tmp_path: Path) -> None:
@@ -63,3 +68,31 @@ def test_buffer_age_is_limited_to_seven_days() -> None:
     assert BufferConfig().max_age_days == 7
     with pytest.raises(ValueError):
         BufferConfig(max_age_days=8)
+
+
+def test_history_is_replayed_once_even_if_the_buffer_is_lost(tmp_path: Path) -> None:
+    from collector.config import CollectorConfig
+    from collector.main import history_to_replay
+
+    config = CollectorConfig.model_validate(
+        {
+            "org": "demo",
+            "site": "plant1",
+            "collector_id": "edge-sim",
+            "mqtt": {"host": "localhost"},
+            "buffer": {"path": str(tmp_path / "data" / "buffer.db")},
+            "machines": [
+                {"id": "sim01", "driver": "simulator", "backfill_hours": 8},
+                {"id": "sim02", "driver": "simulator"},  # no history wanted
+            ],
+        }
+    )
+    buffer = Buffer(config.buffer.path)
+    assert history_to_replay(config, buffer) == {"sim01"}
+    buffer.next_seq("sim01")
+    assert history_to_replay(config, buffer) == set()  # restart with the same buffer
+    buffer.close()
+
+    for leftover in (tmp_path / "data").glob("buffer.db*"):  # the buffer file is lost
+        leftover.unlink()
+    assert history_to_replay(config, Buffer(config.buffer.path)) == set()

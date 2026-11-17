@@ -12,13 +12,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
+from app.admin import identity
 from app.admin import service as admin
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
-from app.core.security import authenticate
-from app.worker.live import read_live
+from app.worker.live import live_channel, read_live
 
 log = logging.getLogger("app.api")
 
@@ -31,33 +31,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.session_factory = create_session_factory(engine)
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    async with app.state.session_factory() as session, session.begin():
+        await identity.bootstrap(session, settings)
     yield
     await app.state.redis.aclose()
     await engine.dispose()
 
 
-app = FastAPI(title="Machine Monitor API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Machine Monitor API", version="0.3.0", lifespan=lifespan)
 app.include_router(router)
 
 
 @app.websocket("/ws/live")
-async def ws_live(websocket: WebSocket, token: str | None = None, site: str | None = None) -> None:
-    """Live machine state: a snapshot first, then every change published by the worker."""
-    if authenticate(websocket.app.state.settings, token) is None:
-        await websocket.close(code=4401)
-        return
+async def ws_live(websocket: WebSocket, token: str | None = None) -> None:
+    """Live state of the machines in the caller's scope: a snapshot, then every change."""
+    async with websocket.app.state.session_factory() as session:
+        scope = await identity.load_scope(session, websocket.app.state.settings, token)
+        if scope is None:
+            # accept first: a close code is visible to the browser only on an open socket
+            await websocket.accept()
+            await websocket.close(code=4401)
+            return
+        allowed = scope.machine_ids()
+        machines = await admin.list_machines(session, allowed)
     await websocket.accept()
     redis: Redis = websocket.app.state.redis
-    async with websocket.app.state.session_factory() as session:
-        machines = [m for m in await admin.list_machines(session) if site in (None, m["site_id"])]
     live = await read_live(redis, [m["id"] for m in machines])
     await websocket.send_text(json.dumps({"type": "snapshot", "machines": list(live.values())}, ensure_ascii=False))
+    # one channel per site; within a site the scope may still cover only one area or machine
+    channels = sorted({live_channel(m["org_code"], m["site_code"]) for m in machines})
 
     async def forward() -> None:
+        if not channels:
+            return
         async with redis.pubsub() as pubsub:
-            await pubsub.psubscribe(f"live.{site or '*'}")
+            await pubsub.subscribe(*channels)
             async for message in pubsub.listen():
-                if message["type"] == "pmessage":
+                if message["type"] == "message" and json.loads(message["data"])["machine_id"] in allowed:
                     await websocket.send_text('{"type":"update","machine":' + message["data"] + "}")
 
     task = asyncio.create_task(forward())

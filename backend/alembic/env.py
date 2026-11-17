@@ -9,7 +9,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
-from app.admin import models as _admin_models  # noqa: F401
 from app.core.config import get_settings
 from app.core.db import Base
 from app.ingest import models as _ingest_models  # noqa: F401

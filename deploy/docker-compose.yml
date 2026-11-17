@@ -18,7 +18,8 @@ x-backend: &backend
     MM_SECRET_KEY: ${MM_SECRET_KEY}
     MM_ADMIN_USERNAME: ${MM_ADMIN_USERNAME}
     MM_ADMIN_PASSWORD: ${MM_ADMIN_PASSWORD}
-    MM_DEVICE_TOKEN: ${MM_DEVICE_TOKEN}
+    MM_DEMO_DATA: ${MM_DEMO_DATA:-false}
+    MM_DEMO_PASSWORD: ${MM_DEMO_PASSWORD:-demo}
     MM_LOG_LEVEL: ${MM_LOG_LEVEL:-INFO}
 
 services:
@@ -29,8 +30,7 @@ services:
     environment:
       MM_MQTT_BACKEND_USER: ${MM_MQTT_BACKEND_USER}
       MM_MQTT_BACKEND_PASSWORD: ${MM_MQTT_BACKEND_PASSWORD}
-      MM_MQTT_EDGE_USER: ${MM_MQTT_EDGE_USER}
-      MM_MQTT_EDGE_PASSWORD: ${MM_MQTT_EDGE_PASSWORD}
+      MM_MQTT_COLLECTORS: edge-sim-a:demo:plant1:${MM_MQTT_SIM_A_PASSWORD},edge-sim-b:demo:plant2:${MM_MQTT_SIM_B_PASSWORD},${MM_MQTT_COLLECTORS:-}
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/docker-entrypoint.sh:/docker-entrypoint-mm.sh:ro
@@ -136,26 +136,42 @@ services:
       api:
         condition: service_healthy
 
-  simulator:
+  # Two simulated collectors on two sites of the demo organization, each with its own broker account.
+  simulator-a:
     profiles: ["dev"]
     build:
       context: ..
       dockerfile: edge/Dockerfile
     image: machine-monitor/edge:dev
     restart: unless-stopped
-    command: ["python", "-m", "collector.main", "--config", "/app/config.sim.yaml"]
+    command: ["python", "-m", "collector.main", "--config", "/app/config.sim.a.yaml"]
     environment:
-      MM_MQTT_PASSWORD: ${MM_MQTT_EDGE_PASSWORD}
+      MM_MQTT_PASSWORD: ${MM_MQTT_SIM_A_PASSWORD}
     volumes:
-      - simulator-data:/app/data
-    depends_on:
+      - simulator-a-data:/app/data
+    depends_on: &simulator-depends
       mosquitto:
         condition: service_healthy
       # on a clean broker nothing is queued until ingest has subscribed once
       ingest:
         condition: service_healthy
 
+  simulator-b:
+    profiles: ["dev"]
+    image: machine-monitor/edge:dev
+    restart: unless-stopped
+    command: ["python", "-m", "collector.main", "--config", "/app/config.sim.b.yaml"]
+    environment:
+      MM_MQTT_PASSWORD: ${MM_MQTT_SIM_B_PASSWORD}
+    volumes:
+      - simulator-b-data:/app/data
+    depends_on:
+      <<: *simulator-depends
+      simulator-a:
+        condition: service_started  # simulator-a builds the shared image
+
 volumes:
   db-data:
-  simulator-data:
+  simulator-a-data:
+  simulator-b-data:
   mosquitto-data:

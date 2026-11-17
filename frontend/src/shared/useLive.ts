@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { getToken, type Live } from "../api/client";
 
 /** Live machine states over WebSocket with automatic reconnect. */
-export function useLive(): { machines: Record<string, Live>; connected: boolean } {
-  const [machines, setMachines] = useState<Record<string, Live>>({});
+export function useLive(): { machines: Record<number, Live>; connected: boolean } {
+  const [machines, setMachines] = useState<Record<number, Live>>({});
   const [connected, setConnected] = useState(false);
   const closed = useRef(false);
 

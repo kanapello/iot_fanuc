@@ -41,15 +41,41 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }
 
-export const query = (params: Record<string, string | number | string[] | undefined | null>) => {
+export const query = (params: Record<string, string | number | (string | number)[] | undefined | null>) => {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
-    if (Array.isArray(value)) value.forEach((v) => search.append(key, v));
+    if (Array.isArray(value)) value.forEach((v) => search.append(key, String(v)));
     else search.append(key, String(value));
   }
   return `?${search.toString()}`;
 };
+
+export interface AreaNode {
+  id: number;
+  site_id: number;
+  name: string;
+}
+
+export interface SiteNode {
+  id: number;
+  org_id: number;
+  code: string;
+  name: string;
+  timezone: string;
+  areas: AreaNode[];
+}
+
+export interface Me {
+  name: string;
+  kind: "user" | "device";
+  superadmin: boolean;
+  roles: string[];
+  menu: { dashboard: boolean; analytics: boolean; references: boolean; structure: boolean; users: boolean };
+  kiosk: { machine_id: number | null; area_id: number | null } | null;
+  organizations: { id: number; code: string; name: string }[];
+  sites: SiteNode[];
+}
 
 export interface ShiftLive {
   name: string;
@@ -67,9 +93,12 @@ export interface ShiftLive {
 }
 
 export interface Live {
-  machine_id: string;
+  machine_id: number;
+  code: string;
   name: string;
-  site_id: string;
+  org_id: number;
+  site_id: number;
+  site_name: string;
   area_id: number | null;
   area_name: string | null;
   state: string;
@@ -86,9 +115,14 @@ export interface Live {
 }
 
 export interface Machine {
-  id: string;
+  id: number;
+  code: string;
   name: string;
-  site_id: string;
+  org_id: number;
+  org_name: string;
+  site_id: number;
+  site_name: string;
+  timezone: string;
   area_id: number | null;
   area_name: string | null;
   live: Live | null;
@@ -105,7 +139,7 @@ export interface Reason {
 }
 
 export interface OeeRow {
-  machine_id: string | null;
+  machine_id: number | null;
   period_start: string;
   period_end: string;
   label: string;
@@ -122,7 +156,7 @@ export interface OeeRow {
 }
 
 export interface Interval {
-  machine_id: string;
+  machine_id: number;
   state: string;
   start_ts: string;
   end_ts: string;

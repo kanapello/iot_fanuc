@@ -12,7 +12,7 @@ RUN --mount=type=secret,id=extra_ca,required=false \
 
 COPY edge/collector ./collector
 COPY edge/scenarios ./scenarios
-COPY edge/config.sim.yaml ./config.sim.yaml
+COPY edge/config.sim.a.yaml edge/config.sim.b.yaml ./
 
 RUN useradd --system --uid 10001 collector && mkdir -p /app/data && chown collector /app/data
 USER collector

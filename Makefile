@@ -10,13 +10,13 @@ PROFILES := --profile dev
 	@echo ">> .env created from .env.example — change the passwords before production use"
 
 up: .env  ## start the server stack + simulator (profile dev)
-	$(COMPOSE) $(PROFILES) up -d --build
+	$(COMPOSE) $(PROFILES) up -d --build --remove-orphans
 
 down: .env  ## stop the stack (volumes are kept)
-	$(COMPOSE) $(PROFILES) down
+	$(COMPOSE) $(PROFILES) down --remove-orphans
 
 clean: .env  ## stop the stack and DELETE its volumes
-	$(COMPOSE) $(PROFILES) down -v
+	$(COMPOSE) $(PROFILES) down -v --remove-orphans
 
 logs: .env  ## make logs s=ingest
 	$(COMPOSE) $(PROFILES) logs -f --tail=100 $(s)
@@ -33,7 +33,7 @@ psql: .env
 recalc: .env  ## make recalc from=2026-11-16T05:00:00Z [to=<iso>] [m=<machine_id>]
 	$(COMPOSE) run --rm worker python -m app.worker recalc --from "$(from)" $(if $(to),--to "$(to)") $(if $(m),--machine "$(m)")
 
-test: test-backend test-edge
+test: test-backend test-edge test-frontend
 
 test-backend:
 	cd backend && uv run pytest -q

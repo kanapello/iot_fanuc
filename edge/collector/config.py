@@ -69,7 +69,8 @@ MachineConfig = Annotated[FanucFocasMachine | SimulatorMachine, Field(discrimina
 
 
 class CollectorConfig(_Model):
-    site: Identifier
+    org: Identifier  # organization code
+    site: Identifier  # site code inside the organization
     collector_id: Identifier
     mqtt: MqttConfig
     focas: FocasConfig | None = None

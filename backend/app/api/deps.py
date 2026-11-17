@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -8,9 +8,10 @@ from fastapi import Depends, Header, HTTPException, Query, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin import identity
 from app.admin import service as admin
+from app.core.access import ANALYTICS_VIEW, MACHINE_VIEW, Scope
 from app.core.config import Settings
-from app.core.security import Principal, authenticate
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -19,8 +20,8 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def get_redis(request: Request) -> Redis:
-    redis: Redis = request.app.state.redis
+def get_redis(request: Request) -> Redis | None:
+    redis: Redis | None = request.app.state.redis
     return redis
 
 
@@ -29,44 +30,71 @@ def get_settings_dep(request: Request) -> Settings:
     return settings
 
 
-def get_principal(
-    settings: Annotated[Settings, Depends(get_settings_dep)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> Principal:
-    token = authorization.removeprefix("Bearer ").strip() if authorization else None
-    principal = authenticate(settings, token)
-    if principal is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
-    return principal
-
-
-def require_admin(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
-    if not principal.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "administrator role required")
-    return principal
-
-
 Session = Annotated[AsyncSession, Depends(get_session)]
-User = Annotated[Principal, Depends(get_principal)]
-Admin = Annotated[Principal, Depends(require_admin)]
+SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+
+
+async def get_scope(
+    session: Session, settings: SettingsDep, authorization: Annotated[str | None, Header()] = None
+) -> Scope:
+    """The single access check: token -> reachable machines and roles on every node."""
+    token = authorization.removeprefix("Bearer ").strip() if authorization else None
+    scope = await identity.load_scope(session, settings, token)
+    if scope is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    return scope
+
+
+CurrentScope = Annotated[Scope, Depends(get_scope)]
+
+NOT_FOUND = HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+FORBIDDEN = HTTPException(status.HTTP_403_FORBIDDEN, "not allowed")
+
+
+def require(scope: Scope, permission: str) -> None:
+    """The caller must hold the permission somewhere, otherwise the whole section is closed to them."""
+    if not scope.has(permission):
+        raise FORBIDDEN
+
+
+def require_machine(scope: Scope, machine_id: int, permission: str = MACHINE_VIEW) -> None:
+    """A machine outside the scope does not exist for the caller (404); inside it the action may be forbidden (403)."""
+    if not scope.can_machine(MACHINE_VIEW, machine_id):
+        raise NOT_FOUND
+    if not scope.can_machine(permission, machine_id):
+        raise FORBIDDEN
 
 
 def as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-async def select_machines(
-    session: Session,
-    machine_id: Annotated[list[str] | None, Query()] = None,
-    area_id: Annotated[int | None, Query()] = None,
-) -> list[dict[str, Any]]:
-    """Machines chosen by ?machine_id=...&machine_id=... or ?area_id=...; all active by default."""
-    machines = await admin.list_machines(session)
-    if machine_id:
-        machines = [m for m in machines if m["id"] in machine_id]
-    if area_id is not None:
-        machines = [m for m in machines if m["area_id"] == area_id]
-    return machines
+def machines_with(permission: str) -> Callable[..., Coroutine[Any, Any, list[dict[str, Any]]]]:
+    """Dependency: machines the caller may reach with ``permission``, narrowed by query parameters.
+
+    Filters can only narrow the scope: naming someone else's machine, site or
+    area simply selects nothing.
+    """
+
+    async def select(
+        scope: CurrentScope,
+        session: Session,
+        machine_id: Annotated[list[int] | None, Query()] = None,
+        site_id: Annotated[int | None, Query()] = None,
+        area_id: Annotated[int | None, Query()] = None,
+    ) -> list[dict[str, Any]]:
+        require(scope, permission)
+        machines = await admin.list_machines(session, scope.machine_ids(permission))
+        if machine_id:
+            machines = [m for m in machines if m["id"] in machine_id]
+        if site_id is not None:
+            machines = [m for m in machines if m["site_id"] == site_id]
+        if area_id is not None:
+            machines = [m for m in machines if m["area_id"] == area_id]
+        return machines
+
+    return select
 
 
-Machines = Annotated[list[dict[str, Any]], Depends(select_machines)]
+ViewMachines = Annotated[list[dict[str, Any]], Depends(machines_with(MACHINE_VIEW))]
+AnalyticsMachines = Annotated[list[dict[str, Any]], Depends(machines_with(ANALYTICS_VIEW))]

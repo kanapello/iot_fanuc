@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, type Live, type Machine } from "../../api/client";
 import { t } from "../../shared/i18n";
+import { NodePicker, useMe, useNodeSelection } from "../../shared/session";
 import { formatDuration, percent, stateColor, stateLabel } from "../../shared/states";
 import { useLive, useNow } from "../../shared/useLive";
 
@@ -44,13 +45,22 @@ function Tile({ machine, live, now }: { machine: Machine; live: Live | undefined
 }
 
 export function DashboardPage() {
-  const { areaId } = useParams();
+  const { areaId: areaParam } = useParams();
+  const { data: me } = useMe();
+  const selection = useNodeSelection(me?.sites);
   const { data: machines } = useQuery({ queryKey: ["machines"], queryFn: () => api<Machine[]>("/machines") });
   const { machines: live, connected } = useLive();
   const now = useNow();
 
-  const visible = (machines ?? []).filter((m) => !areaId || String(m.area_id) === areaId);
-  const areas = [...new Map(visible.map((m) => [m.area_id, m.area_name ?? ""])).entries()];
+  // an area in the address (TV dashboard) wins over the picker
+  const areaId = areaParam ? Number(areaParam) : selection.areaId;
+  const visible = (machines ?? []).filter(
+    (m) => (areaId ? m.area_id === areaId : !selection.siteId || m.site_id === selection.siteId),
+  );
+  const groups = [
+    ...new Map(visible.map((m) => [`${m.site_id}:${m.area_id}`, { site: m.site_name, area: m.area_name ?? "" }])).entries(),
+  ];
+  const manySites = new Set(visible.map((m) => m.site_id)).size > 1;
 
   return (
     <div className="min-h-full p-5">
@@ -59,13 +69,19 @@ export function DashboardPage() {
           {t.common.connectionLost}
         </div>
       )}
+      {!areaParam && me && (
+        <div className="mb-4">
+          <NodePicker sites={me.sites} selection={selection} large />
+        </div>
+      )}
       {!machines && <p className="text-2xl text-slate-400">{t.common.loading}</p>}
-      {areas.map(([id, name]) => (
-        <section key={String(id)} className="mb-6">
-          <h2 className="mb-3 text-2xl font-semibold text-slate-300">{name}</h2>
+      {machines && !visible.length && <p className="text-2xl text-slate-400">{t.common.noData}</p>}
+      {groups.map(([key, { site, area }]) => (
+        <section key={key} className="mb-6">
+          <h2 className="mb-3 text-2xl font-semibold text-slate-300">{manySites ? `${site} · ${area}` : area}</h2>
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             {visible
-              .filter((m) => m.area_id === id)
+              .filter((m) => `${m.site_id}:${m.area_id}` === key)
               .map((m) => (
                 <Tile key={m.id} machine={m} live={live[m.id] ?? m.live ?? undefined} now={now} />
               ))}

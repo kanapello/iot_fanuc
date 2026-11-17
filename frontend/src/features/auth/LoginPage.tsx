@@ -12,7 +12,7 @@ export function LoginPage() {
     try {
       const result = await api<{ token: string }>("/auth/login", { method: "POST", body: { username, password } });
       setToken(result.token);
-      window.location.assign(new URLSearchParams(window.location.search).get("next") ?? "/dashboard");
+      window.location.assign(new URLSearchParams(window.location.search).get("next") ?? "/");
     } catch {
       setError(true);
     }

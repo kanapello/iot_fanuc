@@ -20,9 +20,10 @@ Kind = Literal["telemetry", "event", "heartbeat"]
 @dataclass(frozen=True, slots=True)
 class ParsedMessage:
     kind: Kind
-    site_id: str
+    org_code: str
+    site_code: str
     collector_id: str
-    machine_id: str | None  # None for heartbeat
+    machine_code: str | None  # None for heartbeat
     msg_id: uuid.UUID
     ts: datetime
     seq: int
@@ -39,20 +40,22 @@ class Rejected:
 @dataclass(frozen=True, slots=True)
 class _Topic:
     kind: Kind
-    site_id: str
-    machine_id: str | None
+    org_code: str
+    site_code: str
+    machine_code: str | None
     collector_id: str | None
 
 
 def parse_topic(topic: str) -> _Topic | None:
+    """mm/v1/{org}/{site}/{machine}/telemetry|event, mm/v1/{org}/{site}/collector/{id}/heartbeat."""
     parts = topic.split("/")
     if tuple(parts[:2]) != TOPIC_ROOT or not all(parts):
         return None
-    if len(parts) == 5 and parts[4] in ("telemetry", "event"):
-        kind: Kind = "telemetry" if parts[4] == "telemetry" else "event"
-        return _Topic(kind, parts[2], parts[3], None)
-    if len(parts) == 6 and parts[3] == "collector" and parts[5] == "heartbeat":
-        return _Topic("heartbeat", parts[2], None, parts[4])
+    if len(parts) == 6 and parts[5] in ("telemetry", "event"):
+        kind: Kind = "telemetry" if parts[5] == "telemetry" else "event"
+        return _Topic(kind, parts[2], parts[3], parts[4], None)
+    if len(parts) == 7 and parts[4] == "collector" and parts[6] == "heartbeat":
+        return _Topic("heartbeat", parts[2], parts[3], None, parts[5])
     return None
 
 
@@ -104,7 +107,7 @@ class MessageValidator:
             machine_id = None
             if body["collector_id"] != parsed_topic.collector_id:
                 return reject("collector_id does not match topic")
-        elif machine_id != parsed_topic.machine_id:
+        elif machine_id != parsed_topic.machine_code:
             return reject("machine_id does not match topic")
 
         try:
@@ -113,9 +116,10 @@ class MessageValidator:
             return reject("ts is not a valid timestamp")
         return ParsedMessage(
             kind=parsed_topic.kind,
-            site_id=parsed_topic.site_id,
+            org_code=parsed_topic.org_code,
+            site_code=parsed_topic.site_code,
             collector_id=body["collector_id"],
-            machine_id=machine_id,
+            machine_code=machine_id,
             msg_id=uuid.UUID(body["msg_id"]),
             ts=ts,
             seq=body["seq"],

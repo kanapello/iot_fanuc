@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 import socket
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,7 +28,6 @@ from collector.publisher import MqttPublisher
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from app.core.config import Settings
 from app.ingest.consumer import run_forever
@@ -39,14 +38,15 @@ from tests.conftest import seed_reference
 
 Factory = async_sessionmaker[AsyncSession]
 
-MOSQUITTO_CONF = """\
-listener 1883
-allow_anonymous true
-persistence true
-persistence_location /mosquitto/data/
-max_inflight_messages 500
-max_queued_messages 1000000
-"""
+DEPLOY_CONF = Path(__file__).resolve().parents[3] / "deploy" / "mosquitto" / "mosquitto.conf"
+
+
+def broker_conf() -> str:
+    """The production broker settings (persistence, autosave, queues) without authentication."""
+    skipped = ("allow_anonymous", "password_file", "acl_file")
+    lines = [line for line in DEPLOY_CONF.read_text().splitlines() if not line.startswith(skipped)]
+    return "\n".join([*lines, "allow_anonymous true", ""])
+
 
 # 30 simulated minutes; one poll per simulated second.
 SCENARIO = Scenario.model_validate(
@@ -109,11 +109,14 @@ class Broker:
     def start(self) -> None:
         self.container.get_wrapped_container().start()
 
+    def kill(self) -> None:
+        self.container.get_wrapped_container().kill(signal="SIGKILL")
+
 
 @pytest.fixture
 def broker(tmp_path: Path) -> Iterator[Broker]:
     conf = tmp_path / "mosquitto.conf"
-    conf.write_text(MOSQUITTO_CONF)
+    conf.write_text(broker_conf())
     conf.chmod(0o644)
     with socket.socket() as probe:  # a fixed host port survives a restart of the container
         probe.bind(("127.0.0.1", 0))
@@ -122,10 +125,27 @@ def broker(tmp_path: Path) -> Iterator[Broker]:
         DockerContainer("eclipse-mosquitto:2")
         .with_volume_mapping(str(conf), "/mosquitto/config/mosquitto.conf", "ro")
         .with_bind_ports(1883, port)
-        .waiting_for(LogMessageWaitStrategy(re.compile(r"mosquitto version .* running")))
     )
     with container:
+        _wait_for_port(port)
         yield Broker(container, port)
+
+
+def _wait_for_port(port: int, timeout_s: float = 30.0) -> None:
+    """The published port accepts TCP before mosquitto listens: wait for a real MQTT connection."""
+    import paho.mqtt.client as mqtt
+    from paho.mqtt.enums import CallbackAPIVersion
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        client = mqtt.Client(CallbackAPIVersion.VERSION2)
+        with contextlib.suppress(OSError):
+            connected = client.connect("127.0.0.1", port, keepalive=5) == 0 and client.loop(timeout=2.0) == 0
+            if connected and client.is_connected():
+                client.disconnect()
+                return
+        time.sleep(0.3)
+    raise TimeoutError(f"broker did not accept connections on port {port}")
 
 
 class Collector:
@@ -139,7 +159,7 @@ class Collector:
             "m1",
             # the scenario position survives a collector restart: it follows the clock, not the process
             SimulatorDriver(SCENARIO, clock=clock, offset_s=clock.value),
-            MessageFactory("t1", "edge-it", "m1", partial(self.buffer.next_seq, "m1")),
+            MessageFactory("torg", "t1", "edge-it", "m1", partial(self.buffer.next_seq, "m1")),
             self.publisher,
             now=lambda: start + timedelta(seconds=clock.value),
             monotonic=clock,
@@ -171,7 +191,7 @@ async def test_edge_to_oee(
 ) -> None:
     now = datetime.now(UTC)
     start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
-    machine = await seed_reference(session_factory)
+    machine = (await seed_reference(session_factory, collector="edge-it")).machine
     settings = Settings(mqtt_host="127.0.0.1", mqtt_port=broker.port, ingest_client_id=f"ingest-{disturbance}")
     ingest = asyncio.create_task(run_forever(settings, service))
     await asyncio.sleep(1.5)  # ingest has subscribed
@@ -223,7 +243,7 @@ async def test_edge_to_oee(
             )
         ]
         assert seqs == list(range(1, last_seq + 1))
-        assert await find_seq_gaps(session, now + timedelta(minutes=10)) == []
+        assert await find_seq_gaps(session, [machine["id"]], now + timedelta(minutes=10)) == []
         assert (await session.execute(text("SELECT count(*) FROM ingest_rejects"))).scalar_one() == 0
         events = [r.type for r in await session.execute(text("SELECT type FROM machine_events ORDER BY ts, seq"))]
     assert events == ["alarm_raised", "alarm_cleared"]
@@ -239,3 +259,61 @@ async def test_edge_to_oee(
             .one()
         )
     assert {name: row[name] for name in REFERENCE} == pytest.approx(REFERENCE)
+
+
+async def test_hard_broker_crash_keeps_messages_older_than_autosave(
+    broker: Broker, session_factory: Factory, service: IngestService
+) -> None:
+    """kill -9 of the broker while ingest is down: only the last seconds may be lost."""
+    import json
+    import uuid
+
+    import aiomqtt
+
+    await seed_reference(session_factory, collector="edge-it")
+    settings = Settings(mqtt_host="127.0.0.1", mqtt_port=broker.port, ingest_client_id="ingest-crash")
+
+    async def run_ingest(seconds: float) -> None:
+        task = asyncio.create_task(run_forever(settings, service))
+        await asyncio.sleep(seconds)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    await run_ingest(1.5)  # ingest subscribes once (persistent session), then stops
+
+    def message(seq: int) -> bytes:
+        return json.dumps(
+            {
+                "schema": "telemetry.v1",
+                "msg_id": str(uuid.uuid4()),
+                "collector_id": "edge-it",
+                "machine_id": "m1",
+                "ts": "2026-11-16T19:00:00.000Z",
+                "seq": seq,
+                "data": {"connected": True},
+            }
+        ).encode()
+
+    async with aiomqtt.Client("127.0.0.1", broker.port) as client:
+        for seq in range(1, 51):
+            await client.publish("mm/v1/torg/t1/m1/telemetry", message(seq), qos=1)
+        await asyncio.sleep(8.0)  # longer than autosave_interval
+        for seq in range(51, 56):  # accepted right before the crash: may be lost
+            await client.publish("mm/v1/torg/t1/m1/telemetry", message(seq), qos=1)
+    await asyncio.to_thread(broker.kill)
+    await asyncio.to_thread(broker.start)
+
+    ingest = asyncio.create_task(run_forever(settings, service))
+    try:
+        async with asyncio.timeout(60):
+            while True:
+                async with session_factory() as session:
+                    seqs = {r.seq for r in await session.execute(text("SELECT seq FROM telemetry"))}
+                if set(range(1, 51)) <= seqs:
+                    break
+                await asyncio.sleep(0.3)
+    finally:
+        ingest.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ingest
