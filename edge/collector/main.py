@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from pathlib import Path
 
 from collector.buffer import Buffer
 from collector.config import CollectorConfig, FanucFocasMachine, MachineConfig, SimulatorMachine, load_config
@@ -31,6 +33,9 @@ class LaggedClock:
     def monotonic(self) -> float:
         return time.monotonic() - self.lag_s
 
+    def wall(self) -> float:
+        return time.time() - self.lag_s
+
     def now(self) -> datetime:
         return datetime.now(UTC) - timedelta(seconds=self.lag_s)
 
@@ -43,7 +48,33 @@ def build_driver(config: CollectorConfig, machine: MachineConfig, clock: LaggedC
 
         return FanucFocasDriver(config.focas.library_path, machine.ip, machine.port, machine.part_counter)
     scenario = load_scenario(machine.profile, config.scenarios_dir)
-    return SimulatorDriver(scenario, offset_s=machine.offset_s, time_scale=machine.time_scale, clock=clock.monotonic)
+    return SimulatorDriver(
+        scenario, offset_s=machine.offset_s, time_scale=machine.time_scale, clock=clock.wall, anchor=0.0
+    )
+
+
+def history_to_replay(config: CollectorConfig, buffer: Buffer) -> set[str]:
+    """Simulated machines that replay their history on this start.
+
+    Only on the very first start of a machine. The fact is kept in a file next to
+    the buffer, not in the buffer itself: a lost buffer must look like a real
+    collector that lost its buffer (new epoch, seq from 1), not like a new
+    installation that sends the same hours of history a second time.
+    """
+    marker = Path(config.buffer.path).with_name("history-replayed.json")
+    try:
+        done = set(json.loads(marker.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        done = set()
+    wanted = {
+        m.id
+        for m in config.machines
+        if isinstance(m, SimulatorMachine) and m.backfill_hours > 0 and m.id not in done and not buffer.has_seq(m.id)
+    }
+    if wanted:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(sorted(done | wanted)), encoding="utf-8")
+    return wanted
 
 
 def run_machine(poller: MachinePoller, clock: LaggedClock, step_s: float, stop: threading.Event) -> None:
@@ -60,12 +91,13 @@ def run_machine(poller: MachinePoller, clock: LaggedClock, step_s: float, stop: 
 def run(config: CollectorConfig, stop: threading.Event) -> None:
     buffer = Buffer(config.buffer.path, config.buffer.max_age_days)
     publisher = MqttPublisher(config.mqtt, client_id=config.collector_id, buffer=buffer)
+    replay = history_to_replay(config, buffer)
     pollers: list[MachinePoller] = []
     threads: list[threading.Thread] = []
     for machine in config.machines:
         clock = LaggedClock()
         step_s = 1.0
-        if isinstance(machine, SimulatorMachine) and not buffer.has_seq(machine.id):
+        if isinstance(machine, SimulatorMachine) and machine.id in replay:
             clock.lag_s, step_s = machine.backfill_hours * 3600, machine.backfill_step_s
         poller = MachinePoller(
             machine.id,

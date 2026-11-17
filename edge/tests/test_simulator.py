@@ -137,3 +137,12 @@ def test_bundled_scenarios_and_configs_are_valid() -> None:
     assert 5 <= len(simulated) <= 8
     assert len({site for _, site, _, _ in simulated}) == 2 and len({m for *_, m in simulated}) == len(simulated)
     assert load_config(EDGE_DIR / "config.example.yaml").machines[0].driver == "fanuc_focas"
+
+
+def test_anchored_simulator_survives_a_restart(clock: FakeClock) -> None:
+    """With a fixed anchor the simulated machine depends only on the time, not on when the process started."""
+    scenario = load_scenario("counter_reset")
+    before = SimulatorDriver(scenario, clock=clock, anchor=0.0)
+    clock.advance(5000)
+    restarted = SimulatorDriver(scenario, clock=clock, anchor=0.0)
+    assert restarted.read_snapshot() == before.read_snapshot()

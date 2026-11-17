@@ -119,12 +119,16 @@ class SimulatorDriver:
         offset_s: float = 0.0,
         time_scale: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
+        anchor: float | None = None,
     ) -> None:
         self._scenario = scenario
         self._offset_s = offset_s
         self._time_scale = time_scale
         self._clock = clock
-        self._t0 = clock()
+        # Scenario time 0 is ``anchor`` on the given clock; None = the moment the driver is created.
+        # The collector anchors it to the Unix epoch on wall-clock time, so a restart continues
+        # the same simulated history instead of starting the scenario (and its counters) again.
+        self._t0 = clock() if anchor is None else anchor
 
         steps = scenario.steps
         reset_indexes = [i for i, s in enumerate(steps) if s.state == "counter_reset"]

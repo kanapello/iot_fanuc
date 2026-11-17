@@ -68,3 +68,31 @@ def test_buffer_age_is_limited_to_seven_days() -> None:
     assert BufferConfig().max_age_days == 7
     with pytest.raises(ValueError):
         BufferConfig(max_age_days=8)
+
+
+def test_history_is_replayed_once_even_if_the_buffer_is_lost(tmp_path: Path) -> None:
+    from collector.config import CollectorConfig
+    from collector.main import history_to_replay
+
+    config = CollectorConfig.model_validate(
+        {
+            "org": "demo",
+            "site": "plant1",
+            "collector_id": "edge-sim",
+            "mqtt": {"host": "localhost"},
+            "buffer": {"path": str(tmp_path / "data" / "buffer.db")},
+            "machines": [
+                {"id": "sim01", "driver": "simulator", "backfill_hours": 8},
+                {"id": "sim02", "driver": "simulator"},  # no history wanted
+            ],
+        }
+    )
+    buffer = Buffer(config.buffer.path)
+    assert history_to_replay(config, buffer) == {"sim01"}
+    buffer.next_seq("sim01")
+    assert history_to_replay(config, buffer) == set()  # restart with the same buffer
+    buffer.close()
+
+    for leftover in (tmp_path / "data").glob("buffer.db*"):  # the buffer file is lost
+        leftover.unlink()
+    assert history_to_replay(config, Buffer(config.buffer.path)) == set()

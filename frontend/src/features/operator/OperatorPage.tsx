@@ -47,12 +47,12 @@ function ReasonPicker({ reasons, onPick, onClose }: { reasons: Reason[]; onPick:
   );
 }
 
-function ScrapPanel({ machineId, program, onDone }: { machineId: string; program: string | null; onDone: () => void }) {
+function ScrapPanel({ machineId, program, onDone }: { machineId: number; program: string | null; onDone: () => void }) {
   const [qty, setQty] = useState(1);
   const [busy, setBusy] = useState(false);
   const { data: reasons } = useQuery({
-    queryKey: ["scrap-reasons"],
-    queryFn: () => api<{ id: number; name: string }[]>("/scrap-reasons"),
+    queryKey: ["scrap-reasons", machineId],
+    queryFn: () => api<{ id: number; name: string }[]>(`/scrap-reasons?machine_id=${machineId}`),
   });
   const save = async (reasonId: number) => {
     setBusy(true);
@@ -97,12 +97,15 @@ function ScrapPanel({ machineId, program, onDone }: { machineId: string; program
 }
 
 export function OperatorPage() {
-  const { machineId = "" } = useParams();
+  const machineId = Number(useParams().machineId);
   const { data: machine, isError } = useQuery({
     queryKey: ["machine", machineId],
     queryFn: () => api<Machine>(`/machines/${machineId}`),
   });
-  const { data: reasons } = useQuery({ queryKey: ["reasons"], queryFn: () => api<Reason[]>("/reasons") });
+  const { data: reasons } = useQuery({
+    queryKey: ["reasons", machineId],
+    queryFn: () => api<Reason[]>(`/reasons?machine_id=${machineId}`),
+  });
   const { machines, connected } = useLive();
   const now = useNow();
   const [panel, setPanel] = useState<"none" | "reason" | "scrap">("none");

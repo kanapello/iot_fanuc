@@ -48,6 +48,8 @@ async def ws_live(websocket: WebSocket, token: str | None = None) -> None:
     async with websocket.app.state.session_factory() as session:
         scope = await identity.load_scope(session, websocket.app.state.settings, token)
         if scope is None:
+            # accept first: a close code is visible to the browser only on an open socket
+            await websocket.accept()
             await websocket.close(code=4401)
             return
         allowed = scope.machine_ids()
