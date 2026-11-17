@@ -11,7 +11,8 @@ make up
 ```
 
 Команда создаёт `.env` из `.env.example` (если его нет), собирает образы и поднимает
-брокер, БД, миграции, `ingest` и симулятор на 5 станков (`sim01`…`sim05`).
+брокер, БД, Redis, миграции, `ingest`, `worker`, `api`, `web` и симулятор на 6 станков (`sim01`…`sim06`).
+Интерфейс: <http://localhost:8080> (адреса экранов — в `README.md`).
 
 Проверка, что данные идут:
 
@@ -34,8 +35,7 @@ SELECT * FROM (
 ) g WHERE step > 1;
 ```
 
-Счётчик `seq` на этапе 1 хранится в памяти коллектора и после его перезапуска
-начинается с 1 — постоянным он станет вместе с буфером (этап 2).
+Счётчик `seq` хранится в SQLite-буфере коллектора и переживает его перезапуск.
 
 ## Остальные команды
 
@@ -46,6 +46,7 @@ SELECT * FROM (
 | `make down` | остановить, тома сохранить |
 | `make clean` | остановить и **удалить тома** (БД, очередь брокера) |
 | `make migrate` | `alembic upgrade head` |
+| `make recalc from=<iso> [to=<iso>] [m=<id>]` | пересчёт таймлайна и OEE |
 | `make test` / `make lint` | тесты и линтеры backend + edge |
 
 ## Сборка за прокси с подменой TLS
@@ -59,6 +60,9 @@ x-ca: &ca { secrets: [extra_ca] }
 services:
   migrate: { build: *ca }
   ingest: { build: *ca }
+  worker: { build: *ca }
+  api: { build: *ca }
+  web: { build: *ca }
   simulator: { build: *ca }
 secrets:
   extra_ca: { file: ./ca.crt }
