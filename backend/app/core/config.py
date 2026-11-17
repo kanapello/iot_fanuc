@@ -42,7 +42,9 @@ class Settings(BaseSettings):
 
     # Persistent MQTT session: the broker keeps QoS 1 messages while ingest is down.
     ingest_client_id: str = "mm-ingest-1"
-    ingest_share_group: str = "ingest"
+    # Empty = plain subscription. Mosquitto does not restore shared subscriptions after its
+    # own restart, so with a share group messages published before ingest reconnects are lost.
+    ingest_share_group: str = ""
     ingest_session_expiry_s: int = 7 * 24 * 3600
     ingest_batch_size: int = 500
     # Touched while the MQTT subscription is active; used by the container healthcheck.

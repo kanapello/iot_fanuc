@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from collector.buffer import Buffer
-from collector.config import PartCounterConfig
+from collector.config import BufferConfig, PartCounterConfig
 from collector.drivers.base import DriverConnectionError
 from collector.drivers.fanuc_focas import FanucFocasDriver
 
@@ -57,3 +57,9 @@ def test_focas_driver_against_fake_library(tmp_path: Path) -> None:
 
     with pytest.raises(DriverConnectionError):
         FanucFocasDriver(str(lib), "10.9.9.9").connect()
+
+
+def test_buffer_age_is_limited_to_seven_days() -> None:
+    assert BufferConfig().max_age_days == 7
+    with pytest.raises(ValueError):
+        BufferConfig(max_age_days=8)
