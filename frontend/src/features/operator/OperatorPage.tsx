@@ -108,7 +108,8 @@ export function OperatorPage() {
   });
   const { machines, connected } = useLive();
   const now = useNow();
-  const [panel, setPanel] = useState<"none" | "reason" | "scrap">("none");
+  const [panel, setPanel] = useState<"none" | "reason" | "scrap" | "collision">("none");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   const live = machines[machineId] ?? machine?.live ?? null;
@@ -128,6 +129,16 @@ export function OperatorPage() {
       body: { machine_id: machineId, start_ts: live.downtime_since ?? live.since, reason_id: reasonId },
     });
     setPanel("none");
+  };
+  const markCollision = async () => {
+    setBusy(true);
+    try {
+      await api(`/machines/${machineId}/collisions`, { method: "POST", body: {} });
+      setNotice(t.geometry.collisionSaved);
+      setPanel("none");
+    } finally {
+      setBusy(false);
+    }
   };
   const toggleSetup = async () => {
     setBusy(true);
@@ -160,8 +171,21 @@ export function OperatorPage() {
         )}
       </section>
 
+      {notice && <div className="rounded-xl bg-purple-800 px-5 py-3 text-2xl font-semibold">{notice}</div>}
       {panel === "scrap" ? (
         <ScrapPanel machineId={machineId} program={live.program} onDone={() => setPanel("none")} />
+      ) : panel === "collision" ? (
+        <section className="space-y-5 rounded-3xl bg-slate-800 p-6">
+          <h2 className="text-3xl font-bold">{t.geometry.confirmCollision}</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <button className={`${bigButton} min-h-[96px] bg-purple-700 text-white`} disabled={busy} onClick={markCollision}>
+              {t.geometry.collisionYes}
+            </button>
+            <button className={`${bigButton} min-h-[96px] bg-slate-600 text-white`} onClick={() => setPanel("none")}>
+              {t.common.cancel}
+            </button>
+          </div>
+        </section>
       ) : needsReason || panel === "reason" ? (
         <ReasonPicker reasons={reasons ?? []} onPick={pickReason} onClose={needsReason ? undefined : () => setPanel("none")} />
       ) : (
@@ -176,7 +200,7 @@ export function OperatorPage() {
         </section>
       )}
 
-      <footer className="mt-auto grid grid-cols-1 gap-5 md:grid-cols-3">
+      <footer className="mt-auto grid grid-cols-2 gap-5 xl:grid-cols-4">
         <button
           className={`${bigButton} bg-slate-700 text-white`}
           disabled={!isDown}
@@ -195,6 +219,9 @@ export function OperatorPage() {
           onClick={toggleSetup}
         >
           {live.setup_active ? t.operator.setupOff : t.operator.setupOn}
+        </button>
+        <button className={`${bigButton} bg-purple-800 text-white`} onClick={() => setPanel(panel === "collision" ? "none" : "collision")}>
+          {t.geometry.collision}
         </button>
       </footer>
     </div>

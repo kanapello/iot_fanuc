@@ -169,7 +169,7 @@ async def seed(session: AsyncSession, now: datetime) -> None:
     if "sim01" in machines:  # a squareness that slowly drifts out of tolerance
         for days, wear in ((330, 0.0), (240, 0.25), (150, 0.55), (45, 1.0)):
             last = await add("sim01", days, "XY", 100, 1000, 360, wear)
-        await add("sim01", 45, "ZX", 100, 500, 220, 0.3)
+        await add("sim01", 46, "ZX", 100, 500, 220, 0.3)
         results = _results("XY", 1.0)
         for number, direction in enumerate(("CW", "CCW")):
             angles, deviations = synthetic_trace(100, results, direction, 360, seed=number)
