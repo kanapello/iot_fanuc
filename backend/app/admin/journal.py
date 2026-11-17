@@ -194,3 +194,40 @@ async def set_setup(session: AsyncSession, machine_id: int, active: bool, operat
             text("UPDATE operator_setup_marks SET end_ts = :now WHERE machine_id = :m AND end_ts IS NULL"), params
         )
     await mark_timeline_dirty(session, {machine_id: now})
+
+
+async def add_collision(
+    session: AsyncSession, machine_id: int, ts: datetime, comment: str | None, operator: str | None
+) -> int:
+    """Operator's mark "the machine had a collision": a reason for an unscheduled geometric check."""
+    return int(
+        (
+            await session.execute(
+                text(
+                    "INSERT INTO collision_marks (machine_id, ts, comment, operator) "
+                    "VALUES (:m, :ts, :comment, :operator) RETURNING id"
+                ),
+                {"m": machine_id, "ts": ts, "comment": comment, "operator": operator},
+            )
+        ).scalar_one()
+    )
+
+
+async def list_collisions(
+    session: AsyncSession, since: dict[int, datetime]
+) -> dict[int, list[tuple[datetime, str | None, int, str | None]]]:
+    """Collision marks of each machine after the given moment: (ts, comment, id, operator)."""
+    result: dict[int, list[tuple[datetime, str | None, int, str | None]]] = {m: [] for m in since}
+    if not since:
+        return result
+    rows = await session.execute(
+        text(
+            "SELECT c.id, c.machine_id, c.ts, c.comment, c.operator FROM collision_marks c "
+            "JOIN unnest(CAST(:machines AS bigint[]), CAST(:since AS timestamptz[])) AS s(machine_id, since) "
+            "ON s.machine_id = c.machine_id WHERE c.ts > s.since ORDER BY c.ts"
+        ),
+        {"machines": list(since), "since": list(since.values())},
+    )
+    for r in rows:
+        result[r.machine_id].append((r.ts, r.comment, r.id, r.operator))
+    return result

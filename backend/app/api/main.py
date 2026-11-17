@@ -8,16 +8,18 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
 from app.admin import identity
 from app.admin import service as admin
-from app.api.routes import router
+from app.api import geometry_routes, routes
 from app.core.config import get_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
+from app.geometry import demo as geometry_demo
 from app.worker.live import live_channel, read_live
 
 log = logging.getLogger("app.api")
@@ -33,13 +35,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     async with app.state.session_factory() as session, session.begin():
         await identity.bootstrap(session, settings)
+        if settings.demo_data:
+            await geometry_demo.seed(session, datetime.now(UTC))
     yield
     await app.state.redis.aclose()
     await engine.dispose()
 
 
-app = FastAPI(title="Machine Monitor API", version="0.3.0", lifespan=lifespan)
-app.include_router(router)
+app = FastAPI(title="Machine Monitor API", version="0.4.0", lifespan=lifespan)
+
+# Every REST router of the application. The isolation test walks the routes of exactly this list.
+API_ROUTERS = (routes.router, geometry_routes.router)
+for api_router in API_ROUTERS:
+    app.include_router(api_router)
 
 
 @app.websocket("/ws/live")

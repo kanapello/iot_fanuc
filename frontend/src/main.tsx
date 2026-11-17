@@ -7,7 +7,9 @@ import { AdminPage } from "./features/admin/AdminPage";
 import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
 import { LoginPage } from "./features/auth/LoginPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
+import { MachineCardPage } from "./features/geometry/MachineCardPage";
 import { OperatorPage } from "./features/operator/OperatorPage";
+import { ServicePage } from "./features/service/ServicePage";
 import "./index.css";
 import { t } from "./shared/i18n";
 import { roleLabel, useMe } from "./shared/session";
@@ -32,6 +34,11 @@ function Shell() {
         {menu?.analytics && (
           <NavLink to="/analytics" className={link}>
             {t.nav.analytics}
+          </NavLink>
+        )}
+        {menu?.service && (
+          <NavLink to="/service" className={link}>
+            {t.nav.service}
           </NavLink>
         )}
         {admin && (
@@ -85,6 +92,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route element={<Shell />}>
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/service" element={<ServicePage />} />
+            <Route path="/machines/:machineId" element={<MachineCardPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

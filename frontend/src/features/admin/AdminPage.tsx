@@ -57,6 +57,7 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
           { key: "code", label: c.id, type: "readonly" },
           { key: "name", label: c.name, type: "text" },
           { key: "area_id", label: c.area, type: "select", options: areaOptions },
+          { key: "model", label: c.model, type: "text" },
           { key: "controller_type", label: c.controller, type: "text" },
           { key: "sort_order", label: c.order, type: "number" },
           { key: "is_active", label: c.active, type: "bool" },

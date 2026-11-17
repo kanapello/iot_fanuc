@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _MACHINE_SELECT = (
     "SELECT m.id, m.code, m.name, m.site_id, s.code AS site_code, s.name AS site_name, s.timezone, "
     "s.org_id, o.code AS org_code, o.name AS org_name, m.area_id, a.name AS area_name, m.controller_type, "
-    "m.collector_id, m.is_active, m.sort_order, m.state_rules_id "
+    "m.collector_id, m.is_active, m.sort_order, m.state_rules_id, m.model "
     "FROM machines m JOIN sites s ON s.id = m.site_id JOIN organizations o ON o.id = s.org_id "
     "LEFT JOIN areas a ON a.id = m.area_id "
 )

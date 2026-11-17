@@ -69,8 +69,14 @@ class MachineIn(BaseModel):
     name: str
     area_id: int | None = None
     controller_type: str | None = None
+    model: str | None = Field(default=None, max_length=100)  # machine model: tolerances of the model apply
     is_active: bool = True
     sort_order: int = 0
+
+    @field_validator("model")
+    @classmethod
+    def _model(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
 
 
 class _Node(BaseModel):

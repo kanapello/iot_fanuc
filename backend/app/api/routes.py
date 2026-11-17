@@ -29,6 +29,7 @@ from app.api.deps import (
 from app.core.access import (
     ANALYTICS_VIEW,
     COLLECTORS_VIEW,
+    GEOMETRY_VIEW,
     JOURNAL_EDIT,
     NORMS_EDIT,
     OPERATOR_INPUT,
@@ -100,6 +101,7 @@ async def auth_me(scope: CurrentScope, session: Session) -> dict[str, Any]:
             "references": scope.has(REFERENCE_VIEW) or scope.has(NORMS_EDIT),
             "structure": scope.has(STRUCTURE_EDIT),
             "users": scope.has(USERS_MANAGE),
+            "service": scope.has(GEOMETRY_VIEW),
         },
         "kiosk": None if kiosk is None else {"machine_id": kiosk.machine_id, "area_id": kiosk.area_id},
         "organizations": [o for o in tree["organizations"] if o["id"] in scope.visible_org_ids],

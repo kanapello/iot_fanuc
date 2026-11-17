@@ -71,7 +71,14 @@ export interface Me {
   kind: "user" | "device";
   superadmin: boolean;
   roles: string[];
-  menu: { dashboard: boolean; analytics: boolean; references: boolean; structure: boolean; users: boolean };
+  menu: {
+    dashboard: boolean;
+    analytics: boolean;
+    references: boolean;
+    structure: boolean;
+    users: boolean;
+    service: boolean;
+  };
   kiosk: { machine_id: number | null; area_id: number | null } | null;
   organizations: { id: number; code: string; name: string }[];
   sites: SiteNode[];
@@ -125,6 +132,8 @@ export interface Machine {
   timezone: string;
   area_id: number | null;
   area_name: string | null;
+  model: string | null;
+  controller_type: string | null;
   live: Live | null;
 }
 
@@ -183,4 +192,143 @@ export interface Shift {
 export interface Area {
   id: number;
   name: string;
+}
+
+/** Upload a file (multipart). */
+export async function upload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`/api/v1${path}`, {
+    method: "POST",
+    headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+    body: form,
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new ApiError(response.status, typeof detail?.detail === "string" ? detail.detail : response.statusText);
+  }
+  return (await response.json()) as T;
+}
+
+/** Download a protected file: the browser cannot send the token with a plain link. */
+export async function download(path: string, filename: string): Promise<void> {
+  const response = await fetch(`/api/v1${path}`, { headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} });
+  if (!response.ok) throw new ApiError(response.status, response.statusText);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface CatalogParameter {
+  code: string;
+  unit: string;
+  group: "iso230_4" | "diagnostics";
+  per_axis: boolean;
+  directions: (string | null)[];
+}
+
+export interface Catalog {
+  planes: string[];
+  plane_axes: Record<string, string[]>;
+  arcs: number[];
+  parameters: CatalogParameter[];
+}
+
+export interface BallbarResult {
+  parameter: string;
+  axis: string | null;
+  direction: string | null;
+  value: number;
+  unit: string;
+  limit?: number | null;
+  limit_source?: string | null;
+  exceeded?: boolean;
+}
+
+export interface BallbarTest {
+  id: number;
+  machine_id: number;
+  performed_at: string;
+  engineer: string;
+  plane: string;
+  radius_mm: number;
+  feed_mm_min: number;
+  arc_deg: number;
+  air_temp_c: number | null;
+  machine_temp_c: number | null;
+  template: string | null;
+  notes: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  results_count?: number;
+  files?: number | BallbarFile[];
+  has_traces?: boolean;
+  exceeded?: BallbarResult[];
+  results?: BallbarResult[];
+  traces?: { direction: string; points: number; source: string }[];
+}
+
+export interface BallbarFile {
+  id: number;
+  kind: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  uploaded_by_name: string;
+  uploaded_at: string;
+}
+
+export interface NextCheck {
+  status: "never" | "ok" | "soon" | "overdue" | "event";
+  last_test_at: string | null;
+  due_date: string | null;
+  run_hours_since: number | null;
+  run_hours_left: number | null;
+  triggers: { kind: string; ts: string; code: string | null; message: string | null }[];
+}
+
+export interface GeometryStatus {
+  next_check: NextCheck;
+  policy: {
+    interval_days: number | null;
+    interval_run_hours: number | null;
+    on_alarm: boolean;
+    on_collision: boolean;
+    alarm_patterns: string[];
+    is_default: boolean;
+  };
+  planes: BallbarTest[];
+  configurations: { plane: string; radius_mm: number; feed_mm_min: number; tests: number; last: string }[];
+}
+
+export interface ToleranceRow {
+  id: number;
+  machine_id: number | null;
+  machine_name: string | null;
+  machine_model: string | null;
+  plane: string | null;
+  parameter: string;
+  axis: string | null;
+  limit_value: number;
+  unit: string;
+  editable: boolean;
+}
+
+export interface WorkItem {
+  machine_id: number;
+  machine_name: string;
+  machine_model: string | null;
+  org_name: string;
+  site_name: string;
+  area_name: string | null;
+  kind: string;
+  severity: "high" | "medium" | "low";
+  at: string | null;
+  test_id?: number;
+  plane?: string;
+  details?: BallbarResult[];
+  next_check?: NextCheck;
 }
