@@ -1,5 +1,6 @@
 # Example collector config. Copy to config.yaml and adjust.
-site: plant1
+org: demo                          # organization code (given by the service administrator)
+site: plant1                       # site code inside the organization
 collector_id: edge-shop1
 mqtt:
   host: mm-server.local

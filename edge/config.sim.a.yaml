@@ -1,11 +1,12 @@
-# Simulator-only collector used by `make up` (compose profile "dev"): 6 machines.
+# Simulator collector used by `make up` (compose profile "dev").
 # On the first start each machine replays 8 hours of history so the screens are not empty.
+org: demo
 site: plant1
-collector_id: edge-sim
+collector_id: edge-sim-a
 mqtt:
   host: mosquitto
   port: 1883
-  username: edge
+  username: edge-sim-a
   password_env: MM_MQTT_PASSWORD
 buffer:
   path: /app/data/buffer.db
@@ -13,6 +14,3 @@ machines:
   - { id: sim01, driver: simulator, backfill_hours: 8, profile: milling_normal }
   - { id: sim02, driver: simulator, backfill_hours: 8, profile: frequent_stops, offset_s: 300 }
   - { id: sim03, driver: simulator, backfill_hours: 8, profile: alarm, offset_s: 500 }
-  - { id: sim04, driver: simulator, backfill_hours: 8, profile: connection_loss, offset_s: 700 }
-  - { id: sim05, driver: simulator, backfill_hours: 8, profile: program_change, offset_s: 200 }
-  - { id: sim06, driver: simulator, backfill_hours: 8, profile: counter_reset, offset_s: 100 }

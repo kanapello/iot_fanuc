@@ -11,11 +11,12 @@ from collector.buffer import Buffer
 from collector.messages import heartbeat
 from collector.publisher import Publisher
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 HEARTBEAT_INTERVAL_S = 15.0
 
 
 def run_heartbeat(
+    org: str,
     site: str,
     collector_id: str,
     publisher: Publisher,
@@ -29,8 +30,9 @@ def run_heartbeat(
             "version": VERSION,
             "uptime_s": round(time.monotonic() - started, 1),
             "buffer_size": buffer.size(),
+            "epoch": buffer.epoch,
             "machines": machines(),
         }
         seq = buffer.next_seq(f"collector:{collector_id}")
-        publisher.publish(heartbeat(site, collector_id, datetime.now(UTC), seq, data))
+        publisher.publish(heartbeat(org, site, collector_id, datetime.now(UTC), seq, data))
         stop.wait(HEARTBEAT_INTERVAL_S)

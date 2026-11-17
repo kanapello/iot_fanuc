@@ -70,7 +70,9 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
         poller = MachinePoller(
             machine.id,
             build_driver(config, machine, clock),
-            MessageFactory(config.site, config.collector_id, machine.id, partial(buffer.next_seq, machine.id)),
+            MessageFactory(
+                config.org, config.site, config.collector_id, machine.id, partial(buffer.next_seq, machine.id)
+            ),
             publisher,
             poll_interval_s=machine.poll_interval_ms / 1000,
             keyframe_interval_s=config.keyframe_interval_s,
@@ -86,6 +88,7 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
         threading.Thread(
             target=run_heartbeat,
             args=(
+                config.org,
                 config.site,
                 config.collector_id,
                 publisher,

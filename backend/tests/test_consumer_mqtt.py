@@ -17,7 +17,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from app.core.config import Settings
 from app.ingest.consumer import run_forever
 from app.ingest.service import IngestService
-from tests.conftest import encode, make_message
+from tests.conftest import encode, make_message, seed_reference
 
 Factory = async_sessionmaker[AsyncSession]
 
@@ -58,12 +58,13 @@ async def stop(task: asyncio.Task[None]) -> None:
 async def test_messages_survive_ingest_downtime(
     broker: tuple[str, int], service: IngestService, session_factory: Factory
 ) -> None:
+    await seed_reference(session_factory)
     settings = Settings(mqtt_host=broker[0], mqtt_port=broker[1], ingest_client_id="mm-ingest-test")
 
     task = asyncio.create_task(run_forever(settings, service))
     await asyncio.sleep(1.0)  # let the consumer subscribe
     first = [encode(make_message("telemetry", seq=i)) for i in range(1, 4)]
-    await publish(broker, [*first, ("mm/v1/plant1/m07/telemetry", b"garbage"), encode(make_message("event", seq=4))])
+    await publish(broker, [*first, ("mm/v1/torg/t1/m1/telemetry", b"garbage"), encode(make_message("event", seq=4))])
     await wait_for_count(session_factory, "telemetry", 3)
     await wait_for_count(session_factory, "machine_events", 1)
     await wait_for_count(session_factory, "ingest_rejects", 1)

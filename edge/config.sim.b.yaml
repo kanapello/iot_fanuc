@@ -1,0 +1,16 @@
+# Simulator collector used by `make up` (compose profile "dev").
+# On the first start each machine replays 8 hours of history so the screens are not empty.
+org: demo
+site: plant2
+collector_id: edge-sim-b
+mqtt:
+  host: mosquitto
+  port: 1883
+  username: edge-sim-b
+  password_env: MM_MQTT_PASSWORD
+buffer:
+  path: /app/data/buffer.db
+machines:
+  - { id: sim04, driver: simulator, backfill_hours: 8, profile: connection_loss, offset_s: 700 }
+  - { id: sim05, driver: simulator, backfill_hours: 8, profile: program_change, offset_s: 200 }
+  - { id: sim06, driver: simulator, backfill_hours: 8, profile: counter_reset, offset_s: 100 }

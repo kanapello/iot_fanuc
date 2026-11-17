@@ -54,7 +54,7 @@ class Harness:
         self.poller = MachinePoller(
             "m07",
             self.driver,
-            MessageFactory("plant1", "edge1", "m07"),
+            MessageFactory("demo", "plant1", "edge1", "m07"),
             self.publisher,
             keyframe_interval_s=10,
             now=lambda: self.start + timedelta(seconds=clock.value - 1000),
@@ -80,7 +80,7 @@ def test_publishes_on_change_and_keyframe(clock: FakeClock) -> None:
     assert len(telemetry) == 3 and telemetry[-1]["data"]["part_count"] == 2
     assert [m["seq"] for m in telemetry] == [1, 2, 3]
     assert telemetry[0]["ts"] == "2026-11-16T19:00:00.000Z"
-    assert h.publisher.messages[0].topic == "mm/v1/plant1/m07/telemetry"
+    assert h.publisher.messages[0].topic == "mm/v1/demo/plant1/m07/telemetry"
 
 
 def test_alarm_and_program_events(clock: FakeClock) -> None:

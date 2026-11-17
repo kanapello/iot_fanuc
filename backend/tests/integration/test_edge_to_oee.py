@@ -151,7 +151,7 @@ class Collector:
             "m1",
             # the scenario position survives a collector restart: it follows the clock, not the process
             SimulatorDriver(SCENARIO, clock=clock, offset_s=clock.value),
-            MessageFactory("t1", "edge-it", "m1", partial(self.buffer.next_seq, "m1")),
+            MessageFactory("torg", "t1", "edge-it", "m1", partial(self.buffer.next_seq, "m1")),
             self.publisher,
             now=lambda: start + timedelta(seconds=clock.value),
             monotonic=clock,
@@ -183,7 +183,7 @@ async def test_edge_to_oee(
 ) -> None:
     now = datetime.now(UTC)
     start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
-    machine = await seed_reference(session_factory)
+    machine = (await seed_reference(session_factory, collector="edge-it")).machine
     settings = Settings(mqtt_host="127.0.0.1", mqtt_port=broker.port, ingest_client_id=f"ingest-{disturbance}")
     ingest = asyncio.create_task(run_forever(settings, service))
     await asyncio.sleep(1.5)  # ingest has subscribed
@@ -235,7 +235,7 @@ async def test_edge_to_oee(
             )
         ]
         assert seqs == list(range(1, last_seq + 1))
-        assert await find_seq_gaps(session, now + timedelta(minutes=10)) == []
+        assert await find_seq_gaps(session, [machine["id"]], now + timedelta(minutes=10)) == []
         assert (await session.execute(text("SELECT count(*) FROM ingest_rejects"))).scalar_one() == 0
         events = [r.type for r in await session.execute(text("SELECT type FROM machine_events ORDER BY ts, seq"))]
     assert events == ["alarm_raised", "alarm_cleared"]
@@ -262,7 +262,7 @@ async def test_hard_broker_crash_keeps_messages_older_than_autosave(
 
     import aiomqtt
 
-    await seed_reference(session_factory)
+    await seed_reference(session_factory, collector="edge-it")
     settings = Settings(mqtt_host="127.0.0.1", mqtt_port=broker.port, ingest_client_id="ingest-crash")
 
     async def run_ingest(seconds: float) -> None:
@@ -289,10 +289,10 @@ async def test_hard_broker_crash_keeps_messages_older_than_autosave(
 
     async with aiomqtt.Client("127.0.0.1", broker.port) as client:
         for seq in range(1, 51):
-            await client.publish("mm/v1/t1/m1/telemetry", message(seq), qos=1)
+            await client.publish("mm/v1/torg/t1/m1/telemetry", message(seq), qos=1)
         await asyncio.sleep(8.0)  # longer than autosave_interval
         for seq in range(51, 56):  # accepted right before the crash: may be lost
-            await client.publish("mm/v1/t1/m1/telemetry", message(seq), qos=1)
+            await client.publish("mm/v1/torg/t1/m1/telemetry", message(seq), qos=1)
     await asyncio.to_thread(broker.kill)
     await asyncio.to_thread(broker.start)
 

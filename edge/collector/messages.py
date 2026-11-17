@@ -56,8 +56,9 @@ class MessageFactory:
     """
 
     def __init__(
-        self, site: str, collector_id: str, machine_id: str, next_seq: Callable[[], int] | None = None
+        self, org: str, site: str, collector_id: str, machine_id: str, next_seq: Callable[[], int] | None = None
     ) -> None:
+        self._org = org
         self._site = site
         self._collector_id = collector_id
         self._machine_id = machine_id
@@ -73,7 +74,7 @@ class MessageFactory:
             "seq": self._next_seq(),
             "data": data,
         }
-        topic = f"{TOPIC_PREFIX}/{self._site}/{self._machine_id}/{kind}"
+        topic = f"{TOPIC_PREFIX}/{self._org}/{self._site}/{self._machine_id}/{kind}"
         return OutgoingMessage(topic, json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode())
 
     def telemetry(self, ts: datetime, data: dict[str, Any]) -> OutgoingMessage:
@@ -85,7 +86,7 @@ class MessageFactory:
         return self._envelope("event.v1", "event", ts, data)
 
 
-def heartbeat(site: str, collector_id: str, ts: datetime, seq: int, data: dict[str, Any]) -> OutgoingMessage:
+def heartbeat(org: str, site: str, collector_id: str, ts: datetime, seq: int, data: dict[str, Any]) -> OutgoingMessage:
     body = {
         "schema": "heartbeat.v1",
         "msg_id": uuid7(),
@@ -94,5 +95,5 @@ def heartbeat(site: str, collector_id: str, ts: datetime, seq: int, data: dict[s
         "seq": seq,
         "data": data,
     }
-    topic = f"{TOPIC_PREFIX}/{site}/collector/{collector_id}/heartbeat"
+    topic = f"{TOPIC_PREFIX}/{org}/{site}/collector/{collector_id}/heartbeat"
     return OutgoingMessage(topic, json.dumps(body, separators=(",", ":")).encode(), retain=True, buffered=False)

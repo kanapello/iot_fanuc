@@ -127,9 +127,13 @@ def test_bundled_scenarios_and_configs_are_valid() -> None:
     for name in names:
         assert load_scenario(name).name == name
 
-    sim = load_config(EDGE_DIR / "config.sim.yaml")
-    assert 5 <= len(sim.machines) <= 8
-    for machine in sim.machines:
-        assert machine.driver == "simulator"
-        load_scenario(machine.profile)
+    simulated = []
+    for name in ("config.sim.a.yaml", "config.sim.b.yaml"):  # two collectors on two sites
+        sim = load_config(EDGE_DIR / name)
+        simulated += [(sim.org, sim.site, sim.collector_id, m.id) for m in sim.machines]
+        for machine in sim.machines:
+            assert machine.driver == "simulator"
+            load_scenario(machine.profile)
+    assert 5 <= len(simulated) <= 8
+    assert len({site for _, site, _, _ in simulated}) == 2 and len({m for *_, m in simulated}) == len(simulated)
     assert load_config(EDGE_DIR / "config.example.yaml").machines[0].driver == "fanuc_focas"

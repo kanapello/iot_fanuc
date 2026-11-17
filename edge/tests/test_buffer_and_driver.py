@@ -17,6 +17,7 @@ HERE = Path(__file__).parent
 def test_buffer_keeps_messages_and_seq_across_restart(tmp_path: Path) -> None:
     path = str(tmp_path / "data" / "buffer.db")
     buffer = Buffer(path)
+    epoch = buffer.epoch
     assert [buffer.next_seq("m07"), buffer.next_seq("m07"), buffer.next_seq("m08")] == [1, 2, 1]
     first = buffer.add("t/1", b"one")
     buffer.add("t/2", b"two", retain=True)
@@ -24,11 +25,15 @@ def test_buffer_keeps_messages_and_seq_across_restart(tmp_path: Path) -> None:
     buffer.close()
 
     reopened = Buffer(path)
+    assert reopened.epoch == epoch  # the same buffer file keeps its epoch
     assert reopened.next_seq("m07") == 3
     pending = reopened.pending()
     assert [(m.topic, m.payload, m.retain) for m in pending] == [("t/2", b"two", True)]
     assert reopened.pending(after_id=pending[0].id) == []
     assert reopened.size() == 1
+
+    lost = Buffer(str(tmp_path / "data" / "new-buffer.db"))  # the buffer file was lost and recreated
+    assert lost.epoch != epoch and lost.next_seq("m07") == 1
 
 
 def test_focas_driver_against_fake_library(tmp_path: Path) -> None:

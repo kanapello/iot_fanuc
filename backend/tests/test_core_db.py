@@ -15,10 +15,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.admin import journal
+from app.admin import identity, journal
 from app.api.main import app
 from app.core.config import Settings
-from app.core.security import login
 from app.ingest.health import find_seq_gaps
 from app.timeline import service as timeline
 from app.worker.__main__ import Worker
@@ -62,12 +61,13 @@ async def drain(worker: Worker, factory: Factory, machine: dict[str, Any], now: 
 
 async def test_worker_restart_between_timeline_and_oee_keeps_the_recalculation(session_factory: Factory) -> None:
     """1.1: the OEE mark lives in the database, not in worker memory."""
-    machine = await seed_reference(session_factory)
-    await put_samples(session_factory, "m1", span(0, 1800, **RUNNING))
+    seed = await seed_reference(session_factory)
+    machine, mid = seed.machine, seed.machine_id
+    await put_samples(session_factory, mid, span(0, 1800, **RUNNING))
 
     first = Worker(SETTINGS, session_factory)
     await first.rebuild_timeline(machine, NOW)  # ... and the worker dies before computing OEE
-    assert await rows(session_factory, "SELECT machine_id, from_ts FROM oee_dirty") == [("m1", at(0))]
+    assert await rows(session_factory, "SELECT machine_id, from_ts FROM oee_dirty") == [(mid, at(0))]
     assert await rows(session_factory, "SELECT 1 FROM oee_hourly WHERE period_start = :h", h=T0) == []
 
     restarted = Worker(SETTINGS, session_factory)  # a fresh process: nothing in memory
@@ -90,8 +90,9 @@ HISTORY = [
 
 async def test_closed_recalculation_is_stitched_and_repeatable(session_factory: Factory) -> None:
     """1.5: recalculating the middle of history keeps what follows it; a repeat changes nothing."""
-    machine = await seed_reference(session_factory)
-    await put_samples(session_factory, "m1", [{**s, "part_count": i // 30} for i, s in enumerate(HISTORY)])
+    seed = await seed_reference(session_factory)
+    machine, mid = seed.machine, seed.machine_id
+    await put_samples(session_factory, mid, [{**s, "part_count": i // 30} for i, s in enumerate(HISTORY)])
     await drain(Worker(SETTINGS, session_factory), session_factory, machine)
     original = await intervals(session_factory)
     original_parts = await rows(session_factory, "SELECT ts, delta FROM part_events ORDER BY ts")
@@ -101,7 +102,7 @@ async def test_closed_recalculation_is_stitched_and_repeatable(session_factory: 
 
     async def recalc(start: float, end: float) -> None:
         async with session_factory() as session, session.begin():
-            await timeline.rebuild(session, "m1", NOW, force_from=at(start), force_to=at(end))
+            await timeline.rebuild(session, mid, NOW, force_from=at(start), force_to=at(end))
 
     # same data, same rules: borders inside RUN, inside STOP and exactly on the 3 s blip
     for start, end in [(300, 1000), (900, 2398), (1200, 2400), (0, 3600)]:
@@ -112,7 +113,7 @@ async def test_closed_recalculation_is_stitched_and_repeatable(session_factory: 
     # new rules for the middle only: STOP now starts after 60 s
     async with session_factory() as session, session.begin():
         await session.execute(
-            text("UPDATE state_rules SET rules = CAST(:r AS jsonb), version = 2 WHERE id = 1"),
+            text("UPDATE state_rules SET rules = CAST(:r AS jsonb), version = 2"),
             {"r": json.dumps({**DEFAULT_RULES, "idle_to_stop_s": 60})},
         )
     await recalc(300, 2400)
@@ -129,17 +130,18 @@ async def test_closed_recalculation_is_stitched_and_repeatable(session_factory: 
 
 async def test_long_period_is_rebuilt_in_daily_chunks(session_factory: Factory) -> None:
     """A mark far in the past is processed one day per step and gives the same timeline."""
-    machine = await seed_reference(session_factory)
+    seed = await seed_reference(session_factory)
+    machine, mid = seed.machine, seed.machine_id
     start = T0 - timedelta(days=3)
     samples = [
         {"ts": start + timedelta(minutes=m), "run": "START" if (m // 60) % 3 else "STOP"} for m in range(0, 4000)
     ]
     async with session_factory() as session, session.begin():
         await session.execute(
-            text("UPDATE state_rules SET rules = CAST(:r AS jsonb) WHERE id = 1"),
+            text("UPDATE state_rules SET rules = CAST(:r AS jsonb)"),
             {"r": json.dumps({**DEFAULT_RULES, "offline_timeout_s": 120})},
         )
-    await put_samples(session_factory, "m1", samples)
+    await put_samples(session_factory, mid, samples)
 
     worker = Worker(SETTINGS, session_factory)
     await worker.rebuild_timeline(machine, NOW)
@@ -169,17 +171,20 @@ async def _build_at_once(session: AsyncSession, start: datetime) -> list[tuple[s
 
 async def test_worker_never_writes_operator_input(session_factory: Factory) -> None:
     """1.7: the end of an open downtime reason is derived on read."""
-    machine = await seed_reference(session_factory)
-    await put_samples(session_factory, "m1", [*span(0, 600, **RUNNING), *span(600, 1800), *span(1800, 2400, **RUNNING)])
+    seed = await seed_reference(session_factory)
+    machine, mid = seed.machine, seed.machine_id
+    await put_samples(session_factory, mid, [*span(0, 600, **RUNNING), *span(600, 1800), *span(1800, 2400, **RUNNING)])
     async with session_factory() as session, session.begin():
-        await journal.add_annotation(session, "m1", at(600), None, 30, None, None)  # planned: changeover
+        await journal.add_annotation(
+            session, mid, at(600), None, seed.planned_reason_id, None, None
+        )  # planned: changeover
     await drain(Worker(SETTINGS, session_factory), session_factory, machine)
 
     stored = await rows(session_factory, "SELECT start_ts, end_ts FROM downtime_annotations")
     assert stored == [(at(600), None)]  # exactly what the operator entered
     async with session_factory() as session:
-        (annotation,) = await journal.list_annotations(session, ["m1"], at(0), NOW)
-        planned = await journal.planned_downtime(session, "m1", at(0), NOW, NOW)
+        (annotation,) = await journal.list_annotations(session, [mid], at(0), NOW)
+        planned = await journal.planned_downtime(session, mid, at(0), NOW, NOW)
     assert (annotation["end_ts"], annotation["open_ended"]) == (at(1800), True)
     assert planned == [(at(600), at(1800))]
     # planned downtime is excluded from planned production time of that hour
@@ -198,10 +203,13 @@ async def test_worker_never_writes_operator_input(session_factory: Factory) -> N
 
 @pytest.fixture
 async def client(session_factory: Factory) -> Any:
+    """HTTP client of the API, signed in as the superadmin."""
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
-    token = login(SETTINGS, SETTINGS.admin_username, SETTINGS.admin_password)
+    async with session_factory() as session, session.begin():
+        await identity.bootstrap(session, SETTINGS)
+        token = await identity.login(session, SETTINGS, SETTINGS.admin_username, SETTINGS.admin_password)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test/api/v1", headers={"Authorization": f"Bearer {token}"}
@@ -222,18 +230,19 @@ async def marks(factory: Factory) -> dict[str, list[tuple[Any, ...]]]:
 
 async def test_reference_changes_mark_recalculation(session_factory: Factory, client: httpx.AsyncClient) -> None:
     """1.6: changing shifts, norms, rules or reasons through the API leaves a mark; no manual recalc."""
-    await seed_reference(session_factory)
+    seed = await seed_reference(session_factory)
+    mid, org = seed.machine_id, seed.org_id
     await marks(session_factory)
     horizon = datetime.now(UTC) - timedelta(days=SETTINGS.recalc_horizon_days)
 
     def near_horizon(found: list[tuple[Any, ...]]) -> bool:
-        return [m for m, _ in found] == ["m1"] and abs((found[0][1] - horizon).total_seconds()) < 60
+        return [m for m, _ in found] == [mid] and abs((found[0][1] - horizon).total_seconds()) < 60
 
     # a new norm: valid from now by default, so only the present is recomputed
-    created = await client.post("/admin/programs", json={"program": "O1", "ideal_cycle_time_s": 50})
+    created = await client.post("/admin/programs", json={"org_id": org, "program": "O1", "ideal_cycle_time_s": 50})
     assert created.status_code == 201
     found = await marks(session_factory)
-    assert found["timeline"] == [] and [m for m, _ in found["oee"]] == ["m1"]
+    assert found["timeline"] == [] and [m for m, _ in found["oee"]] == [mid]
     assert abs((found["oee"][0][1] - datetime.now(UTC)).total_seconds()) < 60
 
     # editing an old norm reaches back to its valid_from, limited by the horizon
@@ -243,53 +252,50 @@ async def test_reference_changes_mark_recalculation(session_factory: Factory, cl
     assert near_horizon((await marks(session_factory))["oee"])
 
     ((shift_id,),) = await rows(session_factory, "SELECT id FROM shift_templates")
-    body = {"site_id": "t1", "name": "Day", "start_time": "08:00:00", "end_time": "20:00:00"}
+    body = {"name": "Day", "start_time": "08:00:00", "end_time": "20:00:00"}
     assert (await client.put(f"/admin/shift-templates/{shift_id}", json=body)).status_code == 200
     assert near_horizon((await marks(session_factory))["oee"])
 
-    reason = {"code": "CHANGEOVER", "name": "Changeover", "category": "unplanned", "parent_id": 3}
-    assert (await client.put("/admin/downtime-reasons/30", json=reason)).status_code == 200
+    reason = {"code": "CHANGEOVER", "name": "Changeover", "category": "unplanned", "parent_id": seed.group_id}
+    assert (await client.put(f"/admin/downtime-reasons/{seed.planned_reason_id}", json=reason)).status_code == 200
     assert near_horizon((await marks(session_factory))["oee"])
-    reason["category"] = "planned"
-    assert (await client.put("/admin/downtime-reasons/30", json=reason)).status_code == 200
-    await marks(session_factory)
 
+    ((rules_id,),) = await rows(session_factory, "SELECT id FROM state_rules")
     rules = {"name": "Default", "rules": {**DEFAULT_RULES, "idle_to_stop_s": 90}, "version": 2}
-    assert (await client.put("/admin/state-rules/1", json=rules)).status_code == 200
+    assert (await client.put(f"/admin/state-rules/{rules_id}", json=rules)).status_code == 200
     found = await marks(session_factory)
     assert near_horizon(found["timeline"]) and found["oee"] == []  # OEE follows the rebuilt timeline
 
     # references that do not affect derived data leave no mark
-    assert (await client.post("/admin/scrap-reasons", json={"code": "X1", "name": "Other"})).status_code == 201
+    assert (
+        await client.post("/admin/scrap-reasons", json={"org_id": org, "code": "X1", "name": "Other"})
+    ).status_code == 201
     assert await marks(session_factory) == {"timeline": [], "oee": []}
-    async with session_factory() as session, session.begin():
-        await session.execute(text("DELETE FROM scrap_reasons WHERE code = 'X1'"))
 
 
 async def test_seq_gap_is_logged_and_shown_in_collector_state(
     session_factory: Factory, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     """1.10: a hole in seq is visible in the worker log and in the collector state API."""
-    await seed_reference(session_factory)
-    async with session_factory() as session, session.begin():
-        await session.execute(text("INSERT INTO collectors (id, site_id, name) VALUES ('c1', 't1', 'c1')"))
-        await session.execute(text("UPDATE machines SET collector_id = 'c1'"))
+    mid = (await seed_reference(session_factory)).machine_id
     received = NOW - timedelta(minutes=5)
     samples = [{"ts": at(t), "seq": seq} for t, seq in [(0, 1), (10, 2), (20, 3), (50, 6), (60, 7)]]
-    await put_samples(session_factory, "m1", samples, received_at=received)
+    await put_samples(session_factory, mid, samples, received_at=received)
     async with session_factory() as session, session.begin():
         await session.execute(
             text(
                 "INSERT INTO machine_events (msg_id, ts, machine_id, collector_id, seq, type, payload, received_at) "
-                "VALUES (gen_random_uuid(), :ts, 'm1', 'c1', 4, 'program_changed', '{}', :received)"
+                "VALUES (gen_random_uuid(), :ts, :m, 'c1', 4, 'program_changed', '{}', :received)"
             ),
-            {"ts": at(30), "received": received},
+            {"ts": at(30), "received": received, "m": mid},
         )  # events share the counter with telemetry: seq 4 is not missing, 5 is
 
     async with session_factory() as session:
-        (gap,) = await find_seq_gaps(session, NOW)
-        assert await find_seq_gaps(session, received + timedelta(seconds=10)) == []  # still within the grace time
-    assert (gap["machine_id"], gap["after_seq"], gap["before_seq"], gap["missing"]) == ("m1", 4, 6, 1)
+        (gap,) = await find_seq_gaps(session, [mid], NOW)
+        assert (
+            await find_seq_gaps(session, [mid], received + timedelta(seconds=10)) == []
+        )  # still within the grace time
+    assert (gap["machine_id"], gap["after_seq"], gap["before_seq"], gap["missing"]) == (mid, 4, 6, 1)
 
     with caplog.at_level(logging.WARNING, logger="app.worker"):
         worker = Worker(SETTINGS, session_factory)
@@ -303,5 +309,5 @@ async def test_seq_gap_is_logged_and_shown_in_collector_state(
     assert collector["seq_gaps"][0]["after_seq"] == 4
 
     # the late message arrives: the gap disappears by itself
-    await put_samples(session_factory, "m1", [{"ts": at(40), "seq": 5}], received_at=received)
+    await put_samples(session_factory, mid, [{"ts": at(40), "seq": 5}], received_at=received)
     assert (await client.get("/collectors")).json()[0]["seq_gaps"] == []
