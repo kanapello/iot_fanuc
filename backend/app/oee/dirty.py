@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def mark_oee_dirty(session: AsyncSession, machines: Mapping[str, datetime]) -> None:
+async def mark_oee_dirty(session: AsyncSession, machines: Mapping[int, datetime]) -> None:
     """Remember that OEE of ``machine`` must be recomputed from the given time on."""
     if not machines:
         return
@@ -22,7 +22,7 @@ async def mark_oee_dirty(session: AsyncSession, machines: Mapping[str, datetime]
     )
 
 
-async def take_oee_dirty(session: AsyncSession, machine_id: str) -> datetime | None:
+async def take_oee_dirty(session: AsyncSession, machine_id: int) -> datetime | None:
     """Remove and return the mark; the caller recomputes in the same transaction."""
     result = await session.execute(
         text("DELETE FROM oee_dirty WHERE machine_id = :m RETURNING from_ts"), {"m": machine_id}

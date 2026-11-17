@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,14 +16,18 @@ GRACE_S = 60.0
 _GAPS = """
 WITH raw AS (
     SELECT machine_id, collector_id, seq, ts, received_at FROM telemetry
-    WHERE ts >= :since AND (CAST(:machine_id AS text) IS NULL OR machine_id = CAST(:machine_id AS text))
+    WHERE ts >= :since AND machine_id = ANY(:machine_ids)
     UNION ALL
     SELECT machine_id, collector_id, seq, ts, received_at FROM machine_events
-    WHERE ts >= :since AND (CAST(:machine_id AS text) IS NULL OR machine_id = CAST(:machine_id AS text))
+    WHERE ts >= :since AND machine_id = ANY(:machine_ids)
+), current_epoch AS (
+    -- after a collector lost its buffer its counters restart: older messages belong to another numbering
+    SELECT r.* FROM raw r LEFT JOIN collectors c ON c.id = r.collector_id
+    WHERE c.buffer_lost_at IS NULL OR r.received_at >= c.buffer_lost_at
 ), ordered AS (
     SELECT *, lag(seq) OVER (PARTITION BY machine_id, collector_id ORDER BY seq) AS prev_seq,
            lag(ts) OVER (PARTITION BY machine_id, collector_id ORDER BY seq) AS prev_ts
-    FROM raw
+    FROM current_epoch
 )
 SELECT machine_id, collector_id, prev_seq AS after_seq, seq AS before_seq, seq - prev_seq - 1 AS missing,
        prev_ts AS after_ts, ts AS before_ts
@@ -34,9 +39,9 @@ LIMIT 200
 
 
 async def find_seq_gaps(
-    session: AsyncSession, now: datetime, window_hours: int = 24, machine_id: str | None = None
+    session: AsyncSession, machine_ids: Collection[int], now: datetime, window_hours: int = 24
 ) -> list[dict[str, Any]]:
-    """Gaps in ``seq`` among messages read on the edge during the last ``window_hours``.
+    """Gaps in ``seq`` of the given machines among messages read during the last ``window_hours``.
 
     Computed from raw data on every call: a hole filled by late delivery
     disappears by itself, nothing has to be reset.
@@ -46,7 +51,7 @@ async def find_seq_gaps(
         {
             "since": now - timedelta(hours=window_hours),
             "settled": now - timedelta(seconds=GRACE_S),
-            "machine_id": machine_id,
+            "machine_ids": list(machine_ids),
         },
     )
     return [

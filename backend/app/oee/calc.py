@@ -32,18 +32,21 @@ class NormTable:
     norm wins over the common one of the same program.
     """
 
-    def __init__(self, rows: Iterable[tuple[str, datetime | None, float, bool]] = ()) -> None:
-        """rows: (program, valid_from or None for "always", seconds per part, machine-specific)."""
-        self._rows: dict[str, list[tuple[bool, datetime | None, float]]] = {}
+    def __init__(self, rows: Iterable[tuple[str, datetime | None, float, int]] = ()) -> None:
+        """rows: (program, valid_from or None for "always", seconds per part, rank).
+
+        Rank: the more specific norm wins (2 = machine, 1 = site, 0 = organization default).
+        """
+        self._rows: dict[str, list[tuple[int, datetime | None, float]]] = {}
         for program, valid_from, seconds, specific in rows:
             self._rows.setdefault(program, []).append((specific, valid_from, seconds))
 
     @classmethod
     def constant(cls, norms: Mapping[str, float]) -> NormTable:
-        return cls((program, None, seconds, False) for program, seconds in norms.items())
+        return cls((program, None, seconds, 0) for program, seconds in norms.items())
 
     def lookup(self, program: str | None, at: datetime) -> float | None:
-        best: tuple[bool, datetime | None, float] | None = None
+        best: tuple[int, datetime | None, float] | None = None
         for row in self._rows.get(program or "", ()):
             specific, valid_from, _ = row
             if valid_from is not None and valid_from > at:

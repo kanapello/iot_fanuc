@@ -2,6 +2,7 @@
 
 Derived data depends on shifts, cycle norms, state rules and downtime reasons.
 Whoever changes them through the API only leaves a mark; the worker does the work.
+A row of an organization (site_id NULL) may affect every site of it.
 """
 
 from __future__ import annotations
@@ -15,10 +16,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.oee.dirty import mark_oee_dirty
 from app.timeline.service import mark_dirty as mark_timeline_dirty
 
+_OEE_RESOURCES = ("programs", "shift-templates", "downtime-reasons")
 
-async def _machine_ids(session: AsyncSession, where: str = "true", **params: Any) -> list[str]:
-    rows = await session.execute(text(f"SELECT id FROM machines WHERE is_active AND ({where})"), params)
-    return [r.id for r in rows]
+
+async def _affected_machines(session: AsyncSession, versions: list[dict[str, Any]]) -> list[int]:
+    ids: set[int] = set()
+    for row in versions:
+        found = await session.execute(
+            text(
+                "SELECT m.id FROM machines m JOIN sites s ON s.id = m.site_id WHERE m.is_active AND s.org_id = :org "
+                "AND (CAST(:site AS integer) IS NULL OR m.site_id = :site) "
+                "AND (CAST(:machine AS bigint) IS NULL OR m.id = :machine)"
+            ),
+            {"org": row["org_id"], "site": row.get("site_id"), "machine": row.get("machine_id")},
+        )
+        ids.update(r.id for r in found)
+    return sorted(ids)
 
 
 async def after_reference_change(
@@ -30,35 +43,16 @@ async def after_reference_change(
     horizon_days: int,
 ) -> int:
     """Mark what must be recomputed. Returns the number of machines marked."""
-    horizon = now - timedelta(days=horizon_days)
     versions = [row for row in (before, after) if row is not None]
-    if not versions:
+    if not versions or resource not in (*_OEE_RESOURCES, "state-rules"):
         return 0
-
+    horizon = now - timedelta(days=horizon_days)
+    ids = await _affected_machines(session, versions)
     if resource == "state-rules":
         # the timeline itself changes; OEE follows it
-        ids = await _machine_ids(
-            session, "COALESCE(state_rules_id, 1) = ANY(:rules)", rules=[r["id"] for r in versions]
-        )
         await mark_timeline_dirty(session, {m: horizon for m in ids})
-        return len(ids)
-
-    if resource == "programs":
-        # a norm affects parts made from its valid_from on
-        start = max(horizon, min(r["valid_from"] for r in versions))
-        machine_ids = {r["machine_id"] for r in versions}
-        ids = (
-            await _machine_ids(session)
-            if None in machine_ids
-            else await _machine_ids(session, "id = ANY(:ids)", ids=sorted(machine_ids))
-        )
-    elif resource == "shift-templates":
-        start = horizon
-        ids = await _machine_ids(session, "site_id = ANY(:sites)", sites=sorted({r["site_id"] for r in versions}))
-    elif resource == "downtime-reasons":
-        start = horizon  # the category (planned / unplanned) changes planned production time
-        ids = await _machine_ids(session)
     else:
-        return 0
-    await mark_oee_dirty(session, {m: start for m in ids})
+        # a norm affects parts made from its valid_from on
+        start = max(horizon, min(r["valid_from"] for r in versions)) if resource == "programs" else horizon
+        await mark_oee_dirty(session, {m: start for m in ids})
     return len(ids)

@@ -6,6 +6,7 @@ machine runs again; that end is derived on read (view downtime_annotations_resol
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -27,7 +28,7 @@ _ANNOTATION_SELECT = (
 
 async def add_annotation(
     session: AsyncSession,
-    machine_id: str,
+    machine_id: int,
     start_ts: datetime,
     end_ts: datetime | None,
     reason_id: int,
@@ -35,6 +36,7 @@ async def add_annotation(
     operator: str | None,
 ) -> int:
     """Attach a reason to a period of time. An open annotation lasts until the machine runs again."""
+    await _check_reason(session, "downtime_reasons", reason_id, machine_id)
     # one reason per moment: a new annotation replaces the open one of the same stretch
     await session.execute(
         text("DELETE FROM downtime_annotations WHERE machine_id = :m AND end_ts IS NULL AND start_ts >= :start"),
@@ -60,11 +62,31 @@ async def add_annotation(
     return int(new_id)
 
 
-async def delete_annotation(session: AsyncSession, annotation_id: int) -> bool:
+class ForeignReasonError(ValueError):
+    """The reason does not exist in the organization of the machine."""
+
+
+async def _check_reason(session: AsyncSession, table: str, reason_id: int, machine_id: int) -> None:
+    found = await session.execute(
+        text(
+            f"SELECT 1 FROM {table} r JOIN machines m ON m.id = :m JOIN sites s ON s.id = m.site_id "
+            "WHERE r.id = :reason AND r.org_id = s.org_id AND (r.site_id IS NULL OR r.site_id = m.site_id)"
+        ),
+        {"m": machine_id, "reason": reason_id},
+    )
+    if found.first() is None:
+        raise ForeignReasonError(reason_id)
+
+
+async def delete_annotation(session: AsyncSession, annotation_id: int, machine_ids: Collection[int]) -> bool:
+    """Delete an annotation of one of ``machine_ids`` (the caller's access scope)."""
     row = (
         await session.execute(
-            text("DELETE FROM downtime_annotations WHERE id = :id RETURNING machine_id, start_ts"),
-            {"id": annotation_id},
+            text(
+                "DELETE FROM downtime_annotations WHERE id = :id AND machine_id = ANY(:ids) "
+                "RETURNING machine_id, start_ts"
+            ),
+            {"id": annotation_id, "ids": list(machine_ids)},
         )
     ).first()
     if row is None:
@@ -73,21 +95,28 @@ async def delete_annotation(session: AsyncSession, annotation_id: int) -> bool:
     return True
 
 
+async def annotation_machine(session: AsyncSession, annotation_id: int) -> int | None:
+    result = await session.execute(
+        text("SELECT machine_id FROM downtime_annotations WHERE id = :id"), {"id": annotation_id}
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_annotations(
-    session: AsyncSession, machine_ids: list[str], start: datetime, end: datetime
+    session: AsyncSession, machine_ids: Collection[int], start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(
             _ANNOTATION_SELECT + "WHERE a.machine_id = ANY(:ids) AND a.start_ts < :end "
             "AND (a.effective_end_ts IS NULL OR a.effective_end_ts > :start) ORDER BY a.machine_id, a.start_ts"
         ),
-        {"ids": machine_ids, "start": start, "end": end},
+        {"ids": list(machine_ids), "start": start, "end": end},
     )
     return [dict(r._mapping) for r in rows]
 
 
 async def current_reason(
-    session: AsyncSession, machine_id: str, since: datetime, now: datetime
+    session: AsyncSession, machine_id: int, since: datetime, now: datetime
 ) -> dict[str, Any] | None:
     """Reason covering the current downtime stretch, if the operator gave one."""
     row = (
@@ -105,7 +134,7 @@ async def current_reason(
 
 
 async def planned_downtime(
-    session: AsyncSession, machine_id: str, start: datetime, end: datetime, now: datetime
+    session: AsyncSession, machine_id: int, start: datetime, end: datetime, now: datetime
 ) -> list[tuple[datetime, datetime]]:
     """Periods annotated with a reason of category 'planned' (excluded from planned production time)."""
     rows = await list_annotations(session, [machine_id], start, end)
@@ -114,13 +143,15 @@ async def planned_downtime(
 
 async def add_scrap(
     session: AsyncSession,
-    machine_id: str,
+    machine_id: int,
     ts: datetime,
     qty: int,
     reason_id: int | None,
     program: str | None,
     operator: str | None,
 ) -> int:
+    if reason_id is not None:
+        await _check_reason(session, "scrap_reasons", reason_id, machine_id)
     new_id = (
         await session.execute(
             text(
@@ -135,7 +166,7 @@ async def add_scrap(
 
 
 async def list_scrap(
-    session: AsyncSession, machine_ids: list[str], start: datetime, end: datetime
+    session: AsyncSession, machine_ids: Collection[int], start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(
@@ -143,12 +174,12 @@ async def list_scrap(
             "FROM scrap_records s LEFT JOIN scrap_reasons r ON r.id = s.reason_id "
             "WHERE s.machine_id = ANY(:ids) AND s.ts >= :start AND s.ts < :end ORDER BY s.ts DESC"
         ),
-        {"ids": machine_ids, "start": start, "end": end},
+        {"ids": list(machine_ids), "start": start, "end": end},
     )
     return [dict(r._mapping) for r in rows]
 
 
-async def set_setup(session: AsyncSession, machine_id: str, active: bool, operator: str | None, now: datetime) -> None:
+async def set_setup(session: AsyncSession, machine_id: int, active: bool, operator: str | None, now: datetime) -> None:
     """Operator's manual "setup" mark; a change re-derives the timeline from that moment."""
     params = {"m": machine_id, "now": now, "operator": operator}
     if await setup_active(session, machine_id) == active:

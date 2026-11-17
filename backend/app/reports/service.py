@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -41,10 +42,12 @@ ORDER BY u.duration_s DESC
 
 
 async def downtime_pareto(
-    session: AsyncSession, machine_ids: list[str], start: datetime, end: datetime, now: datetime
+    session: AsyncSession, machine_ids: Collection[int], start: datetime, end: datetime, now: datetime
 ) -> list[dict[str, Any]]:
     """Downtime by reason, longest first. Time without a reason is reported per state."""
-    rows = await session.execute(text(_PARETO), {"ids": machine_ids, "start": start, "end": min(end, now), "now": now})
+    rows = await session.execute(
+        text(_PARETO), {"ids": list(machine_ids), "start": start, "end": min(end, now), "now": now}
+    )
     return [
         {**m, "duration_s": float(m["duration_s"]), "count": int(m["count"])} for m in (dict(r._mapping) for r in rows)
     ]

@@ -14,7 +14,7 @@ from app.timeline.builder import IDLE, NOT_RUN, STOP, Interval, Rules, Sample, b
 _SAMPLE_COLUMNS = "ts, connected, mode, run, alarm, emergency, program, part_count"
 
 
-async def mark_dirty(session: AsyncSession, machines: Mapping[str, datetime]) -> None:
+async def mark_dirty(session: AsyncSession, machines: Mapping[int, datetime]) -> None:
     """Tell the worker that data of ``machine`` changed at or after the given time."""
     if not machines:
         return
@@ -27,13 +27,16 @@ async def mark_dirty(session: AsyncSession, machines: Mapping[str, datetime]) ->
     )
 
 
-async def load_rules(session: AsyncSession, machine_id: str) -> Rules:
+async def load_rules(session: AsyncSession, machine_id: int) -> Rules:
+    """Rules of a machine: its own, else of its site, else the organization default, else built-in."""
     row = (
         await session.execute(
             text(
-                "SELECT r.rules, r.version FROM state_rules r "
-                "LEFT JOIN machines m ON m.id = :m "
-                "WHERE r.id = COALESCE(m.state_rules_id, 1) ORDER BY r.id LIMIT 1"
+                "SELECT r.rules, r.version FROM machines m JOIN sites s ON s.id = m.site_id "
+                "JOIN state_rules r ON r.id = m.state_rules_id "
+                "OR (r.org_id = s.org_id AND (r.site_id = m.site_id OR r.site_id IS NULL)) "
+                "WHERE m.id = :m "
+                "ORDER BY (r.id = m.state_rules_id) DESC NULLS LAST, (r.site_id IS NOT NULL) DESC, r.id LIMIT 1"
             ),
             {"m": machine_id},
         )
@@ -59,7 +62,7 @@ CHUNK = timedelta(days=1)
 
 async def rebuild(
     session: AsyncSession,
-    machine_id: str,
+    machine_id: int,
     now: datetime,
     force_from: datetime | None = None,
     force_to: datetime | None = None,
@@ -76,7 +79,7 @@ async def rebuild(
     Returns the moment from which derived data changed, if any.
     """
     params: dict[str, Any] = {"m": machine_id}
-    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:m))"), params)
+    await session.execute(text("SELECT pg_advisory_xact_lock(:m)"), params)
     changed_from = force_from
     if force_from is None:
         changed_from = (
@@ -181,7 +184,7 @@ async def rebuild(
 
 
 async def _store_intervals(
-    session: AsyncSession, machine_id: str, intervals: list[Interval], closed_to: datetime | None, version: int
+    session: AsyncSession, machine_id: int, intervals: list[Interval], closed_to: datetime | None, version: int
 ) -> None:
     """Replace the chain from the first new interval on; for a closed period keep what follows it."""
     params: dict[str, Any] = {"m": machine_id, "first": intervals[0].start, "to": closed_to}
@@ -241,7 +244,7 @@ async def _store_intervals(
 
 
 async def get_intervals(
-    session: AsyncSession, machine_ids: Sequence[str], start: datetime, end: datetime
+    session: AsyncSession, machine_ids: Sequence[int], start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     """Intervals overlapping [start, end), oldest first."""
     rows = await session.execute(
@@ -256,7 +259,7 @@ async def get_intervals(
 
 
 async def get_part_events(
-    session: AsyncSession, machine_id: str, start: datetime, end: datetime
+    session: AsyncSession, machine_id: int, start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(
@@ -268,7 +271,7 @@ async def get_part_events(
     return [dict(r._mapping) for r in rows]
 
 
-async def current_state(session: AsyncSession, machine_id: str) -> dict[str, Any] | None:
+async def current_state(session: AsyncSession, machine_id: int) -> dict[str, Any] | None:
     """Open interval plus the start of the whole non-running stretch it belongs to."""
     rows = (
         await session.execute(
@@ -295,7 +298,7 @@ async def current_state(session: AsyncSession, machine_id: str) -> dict[str, Any
     }
 
 
-async def latest_sample(session: AsyncSession, machine_id: str) -> dict[str, Any] | None:
+async def latest_sample(session: AsyncSession, machine_id: int) -> dict[str, Any] | None:
     row = (
         await session.execute(
             text(
@@ -308,7 +311,7 @@ async def latest_sample(session: AsyncSession, machine_id: str) -> dict[str, Any
     return dict(row._mapping) if row else None
 
 
-async def setup_active(session: AsyncSession, machine_id: str) -> bool:
+async def setup_active(session: AsyncSession, machine_id: int) -> bool:
     result = await session.execute(
         text("SELECT 1 FROM operator_setup_marks WHERE machine_id = :m AND end_ts IS NULL LIMIT 1"), {"m": machine_id}
     )

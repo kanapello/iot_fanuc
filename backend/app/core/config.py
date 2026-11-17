@@ -19,12 +19,14 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
-    # Auth (skeleton): one administrator and one shared token for kiosks / TV dashboards.
-    secret_key: str = "change-me-secret"
+    # Auth. The superadmin account is created on first start from these values.
+    secret_key: str = "change-me-secret-change-me-secret-32"
     admin_username: str = "admin"
     admin_password: str = "admin"
-    device_token: str = "change-me-device-token"
     token_ttl_hours: int = 12
+    # Development only: demo users and kiosk tokens with well-known values.
+    demo_data: bool = False
+    demo_password: str = "demo"
 
     worker_interval_s: float = 2.0
     oee_interval_s: float = 10.0

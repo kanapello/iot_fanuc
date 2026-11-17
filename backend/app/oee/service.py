@@ -27,7 +27,9 @@ _VALUES = ", ".join(f":{name.strip()}" for name in _COLUMNS.split(","))
 
 
 async def site_shifts(session: AsyncSession, machine: dict[str, Any], start: datetime, end: datetime) -> list[Shift]:
-    templates = [ShiftTemplate.from_row(r) for r in await admin.shift_templates(session, machine["site_id"])]
+    templates = [
+        ShiftTemplate.from_row(r) for r in await admin.shift_templates(session, machine["org_id"], machine["site_id"])
+    ]
     return shift_instances(templates, machine["timezone"], start, end)
 
 
@@ -49,7 +51,7 @@ async def recompute(
     parts = [(p["ts"], p["program"], p["delta"]) for p in await timeline.get_part_events(session, machine_id, lo, hi)]
     planned = await journal.planned_downtime(session, machine_id, lo, hi, now)
     scrap = [(s["ts"], s["qty"]) for s in await journal.list_scrap(session, [machine_id], lo, hi)]
-    norms = NormTable(await admin.cycle_norms(session, machine_id))
+    norms = NormTable(await admin.cycle_norms(session, machine))
 
     def calc(windows: list[tuple[datetime, datetime]], p0: datetime, p1: datetime) -> OeeResult:
         scrapped = sum(qty for ts, qty in scrap if p0 <= ts < p1)
@@ -118,7 +120,7 @@ async def process_dirty(session: AsyncSession, machine: dict[str, Any], now: dat
     return True
 
 
-async def current_shift(session: AsyncSession, machine_id: str, now: datetime) -> dict[str, Any] | None:
+async def current_shift(session: AsyncSession, machine_id: int, now: datetime) -> dict[str, Any] | None:
     row = (
         await session.execute(
             text(

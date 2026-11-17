@@ -42,10 +42,10 @@ class Worker:
         self._settings = settings
         self._session_factory = session_factory
         self._redis = redis
-        self._oee_at: dict[str, datetime] = {}  # last refresh of the current hour / shift (only a throttle)
-        self._published: dict[str, str] = {}
+        self._oee_at: dict[int, datetime] = {}  # last refresh of the current hour / shift (only a throttle)
+        self._published: dict[int, str] = {}
         self._gaps_at: datetime | None = None
-        self._known_gaps: set[tuple[str, int, int]] = set()
+        self._known_gaps: set[tuple[int, int, int]] = set()
 
     async def rebuild_timeline(self, machine: dict[str, Any], now: datetime) -> None:
         """Timeline step. A change is recorded as an OEE mark in the same transaction."""
@@ -71,7 +71,8 @@ class Worker:
         async with self._session_factory() as session:
             payload = await build_live(session, machine, now)
         machine_id = machine["id"]
-        self._published[machine_id] = await publish_live(self._redis, payload, self._published.get(machine_id))
+        previous = self._published.get(machine_id)
+        self._published[machine_id] = await publish_live(self._redis, machine, payload, previous)
 
     async def check_seq_gaps(self, now: datetime) -> None:
         """Log every newly found gap in message sequence numbers (lost data)."""
@@ -79,7 +80,8 @@ class Worker:
             return
         self._gaps_at = now
         async with self._session_factory() as session:
-            gaps = await find_seq_gaps(session, now, self._settings.seq_check_window_hours)
+            machine_ids = [m["id"] for m in await admin.list_machines_system(session, active_only=False)]
+            gaps = await find_seq_gaps(session, machine_ids, now, self._settings.seq_check_window_hours)
         for gap in gaps:
             key = (gap["machine_id"], gap["after_seq"], gap["before_seq"])
             if key not in self._known_gaps:
@@ -88,7 +90,7 @@ class Worker:
 
     async def tick(self, now: datetime) -> None:
         async with self._session_factory() as session:
-            machines = await admin.list_machines(session)
+            machines = await admin.list_machines_system(session)
         for machine in machines:
             try:
                 await self.rebuild_timeline(machine, now)
@@ -110,28 +112,30 @@ class Worker:
             await asyncio.sleep(max(0.2, self._settings.worker_interval_s - elapsed))
 
 
-async def recalc(
-    session_factory: SessionFactory, machine_id: str | None, start: datetime, end: datetime | None
-) -> None:
+async def recalc(session_factory: SessionFactory, machine: str | None, start: datetime, end: datetime | None) -> None:
     """Rebuild timeline and OEE for [start, end]; without ``end`` up to the present moment.
 
     Intervals after ``end`` are left untouched and stitched at the border.
     """
     now = datetime.now(UTC)
     async with session_factory() as session:
-        machines = [m for m in await admin.list_machines(session, active_only=False) if machine_id in (None, m["id"])]
+        machines = [
+            m
+            for m in await admin.list_machines_system(session, active_only=False)
+            if machine in (None, str(m["id"]), m["code"])
+        ]
     if not machines:
-        raise SystemExit(f"machine not found: {machine_id}")
+        raise SystemExit(f"machine not found: {machine}")
     stop = min(end or now, now)
-    for machine in machines:
+    for item in machines:
         cursor = start
         while cursor < stop:  # one day per transaction
             chunk_end = min(cursor + timeline.CHUNK, stop)
             async with session_factory() as session, session.begin():
-                await timeline.rebuild(session, machine["id"], now, force_from=cursor, force_to=chunk_end)
-                await oee.recompute(session, machine, cursor, chunk_end, now)
+                await timeline.rebuild(session, item["id"], now, force_from=cursor, force_to=chunk_end)
+                await oee.recompute(session, item, cursor, chunk_end, now)
             cursor = chunk_end
-        log.info("recalculated", extra={"machine_id": machine["id"], "from": start.isoformat(), "to": stop.isoformat()})
+        log.info("recalculated", extra={"machine": item["code"], "from": start.isoformat(), "to": stop.isoformat()})
 
 
 def _parse_ts(value: str) -> datetime:
@@ -143,7 +147,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(prog="app.worker")
     sub = parser.add_subparsers(dest="command")
     recalc_parser = sub.add_parser("recalc", help="rebuild timeline and OEE for a period")
-    recalc_parser.add_argument("--machine", default=None, help="machine id (default: all machines)")
+    recalc_parser.add_argument("--machine", default=None, help="machine id or code (default: all machines)")
     recalc_parser.add_argument("--from", dest="start", required=True, type=_parse_ts)
     recalc_parser.add_argument("--to", dest="end", default=None, type=_parse_ts)
     args = parser.parse_args()
