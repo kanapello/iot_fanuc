@@ -54,30 +54,54 @@ def _sample(row: Any) -> Sample:
     )
 
 
-async def rebuild(
-    session: AsyncSession, machine_id: str, now: datetime, force_from: datetime | None = None
-) -> datetime | None:
-    """Bring the timeline of one machine up to ``now``.
+CHUNK = timedelta(days=1)
 
-    Rebuilds from the earliest changed moment (dirty mark or ``force_from``);
-    with no new data only the tail is extended (OFFLINE / IDLE->STOP depend on
-    time). Returns the moment from which derived data changed, if any.
+
+async def rebuild(
+    session: AsyncSession,
+    machine_id: str,
+    now: datetime,
+    force_from: datetime | None = None,
+    force_to: datetime | None = None,
+) -> datetime | None:
+    """Bring the timeline of one machine up to date.
+
+    Without ``force_from`` the pending dirty mark is taken; with no new data
+    only the tail is extended (OFFLINE / IDLE->STOP depend on time).
+
+    With ``force_to`` only the closed period [force_from, force_to] is rebuilt
+    and stitched to the untouched intervals after it. Long open periods are
+    processed one CHUNK at a time: the rest stays marked dirty for the next call.
+
+    Returns the moment from which derived data changed, if any.
     """
     params: dict[str, Any] = {"m": machine_id}
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:m))"), params)
-    dirty = (
-        await session.execute(text("DELETE FROM timeline_dirty WHERE machine_id = :m RETURNING from_ts"), params)
-    ).scalar_one_or_none()
-    changed_from = min((t for t in (dirty, force_from) if t is not None), default=None)
+    changed_from = force_from
+    if force_from is None:
+        changed_from = (
+            await session.execute(text("DELETE FROM timeline_dirty WHERE machine_id = :m RETURNING from_ts"), params)
+        ).scalar_one_or_none()
     start = min(changed_from, now) if changed_from is not None else now
-    params["w"], params["now"] = start, now
     rules = await load_rules(session, machine_id)
+
+    # A closed rebuild looks a little past its end so that debounce and offline
+    # decisions near the border are the same as in a full rebuild.
+    lookahead = timedelta(seconds=2 * max(rules.offline_timeout_s, rules.min_interval_s))
+    closed_to = force_to
+    continue_from: datetime | None = None
+    if closed_to is None and now - start > CHUNK:
+        closed_to = continue_from = start + CHUNK
+    if closed_to is not None and (closed_to + lookahead >= now or closed_to <= start):
+        closed_to = None
+    build_end = now if closed_to is None else closed_to + lookahead
+    params["w"], params["end"] = start, build_end
 
     container = (
         await session.execute(
             text(
                 "SELECT state, start_ts, end_ts, program FROM state_intervals "
-                "WHERE machine_id = :m AND start_ts <= :w ORDER BY start_ts DESC LIMIT 1"
+                "WHERE machine_id = :m AND start_ts < :w ORDER BY start_ts DESC LIMIT 1"
             ),
             params,
         )
@@ -101,7 +125,7 @@ async def rebuild(
     rows = (
         await session.execute(
             text(
-                f"SELECT {_SAMPLE_COLUMNS} FROM telemetry WHERE machine_id = :m AND ts >= :w AND ts <= :now ORDER BY ts"
+                f"SELECT {_SAMPLE_COLUMNS} FROM telemetry WHERE machine_id = :m AND ts >= :w AND ts <= :end ORDER BY ts"
             ),
             params,
         )
@@ -121,35 +145,14 @@ async def rebuild(
         )
     ]
     intervals = build_intervals(
-        samples, rules, start, now, prev=_sample(prev_row) if prev_row else None, carry=carry, marks=marks
+        samples, rules, start, build_end, prev=_sample(prev_row) if prev_row else None, carry=carry, marks=marks
     )
+    if closed_to is not None:
+        intervals = [i for i in intervals if i.start < closed_to]
+        if intervals:
+            intervals[-1] = Interval(intervals[-1].state, intervals[-1].start, closed_to, intervals[-1].program)
     if intervals:
-        first = {"m": machine_id, "first": intervals[0].start}
-        await session.execute(text("DELETE FROM state_intervals WHERE machine_id = :m AND start_ts >= :first"), first)
-        await session.execute(
-            text(
-                "UPDATE state_intervals SET end_ts = :first "
-                "WHERE machine_id = :m AND (end_ts IS NULL OR end_ts > :first)"
-            ),
-            first,
-        )
-        await session.execute(
-            text(
-                "INSERT INTO state_intervals (machine_id, state, start_ts, end_ts, program, rules_version) "
-                "VALUES (:m, :state, :start_ts, :end_ts, :program, :version)"
-            ),
-            [
-                {
-                    "m": machine_id,
-                    "state": i.state,
-                    "start_ts": i.start,
-                    "end_ts": i.end,
-                    "program": i.program,
-                    "version": rules.version,
-                }
-                for i in intervals
-            ],
-        )
+        await _store_intervals(session, machine_id, intervals, closed_to, rules.version)
 
     if changed_from is not None:
         prev_count = (
@@ -161,14 +164,80 @@ async def rebuild(
                 params,
             )
         ).scalar_one_or_none()
-        await session.execute(text("DELETE FROM part_events WHERE machine_id = :m AND ts >= :w"), params)
-        events = part_events(samples, prev_count)
+        parts_end = closed_to or build_end + timedelta(days=36500)
+        await session.execute(
+            text("DELETE FROM part_events WHERE machine_id = :m AND ts >= :w AND ts < :parts_end"),
+            {**params, "parts_end": parts_end},
+        )
+        events = [e for e in part_events(samples, prev_count) if e.ts < parts_end]
         if events:
             await session.execute(
                 text("INSERT INTO part_events (machine_id, ts, program, delta) VALUES (:m, :ts, :program, :delta)"),
                 [{"m": machine_id, "ts": e.ts, "program": e.program, "delta": e.delta} for e in events],
             )
+    if continue_from is not None and closed_to is not None:
+        await mark_dirty(session, {machine_id: continue_from})
     return changed_from
+
+
+async def _store_intervals(
+    session: AsyncSession, machine_id: str, intervals: list[Interval], closed_to: datetime | None, version: int
+) -> None:
+    """Replace the chain from the first new interval on; for a closed period keep what follows it."""
+    params: dict[str, Any] = {"m": machine_id, "first": intervals[0].start, "to": closed_to}
+    if closed_to is None:
+        await session.execute(text("DELETE FROM state_intervals WHERE machine_id = :m AND start_ts >= :first"), params)
+    else:
+        await session.execute(
+            text(
+                "DELETE FROM state_intervals WHERE machine_id = :m AND start_ts >= :first "
+                "AND end_ts IS NOT NULL AND end_ts <= :to"
+            ),
+            params,
+        )
+        # the old interval crossing the border keeps only its part after the border
+        await session.execute(
+            text(
+                "UPDATE state_intervals SET start_ts = :to WHERE machine_id = :m AND start_ts >= :first "
+                "AND start_ts < :to AND (end_ts IS NULL OR end_ts > :to)"
+            ),
+            params,
+        )
+    await session.execute(
+        text(
+            "UPDATE state_intervals SET end_ts = :first "
+            "WHERE machine_id = :m AND start_ts < :first AND (end_ts IS NULL OR end_ts > :first)"
+        ),
+        params,
+    )
+    if closed_to is not None:
+        tail = (
+            await session.execute(
+                text("SELECT id, state, end_ts FROM state_intervals WHERE machine_id = :m AND start_ts = :to"), params
+            )
+        ).first()
+        last = intervals[-1]
+        if tail is not None and tail.state == last.state:
+            # same state on both sides of the border: one interval again
+            await session.execute(text("DELETE FROM state_intervals WHERE id = :id"), {"id": tail.id})
+            intervals = [*intervals[:-1], Interval(last.state, last.start, tail.end_ts, last.program)]
+    await session.execute(
+        text(
+            "INSERT INTO state_intervals (machine_id, state, start_ts, end_ts, program, rules_version) "
+            "VALUES (:m, :state, :start_ts, :end_ts, :program, :version)"
+        ),
+        [
+            {
+                "m": machine_id,
+                "state": i.state,
+                "start_ts": i.start,
+                "end_ts": i.end,
+                "program": i.program,
+                "version": version,
+            }
+            for i in intervals
+        ],
+    )
 
 
 async def get_intervals(
@@ -237,23 +306,6 @@ async def latest_sample(session: AsyncSession, machine_id: str) -> dict[str, Any
         )
     ).first()
     return dict(row._mapping) if row else None
-
-
-async def set_setup(session: AsyncSession, machine_id: str, active: bool, operator: str | None, now: datetime) -> None:
-    """Operator's manual "setup" mark; a change re-derives the timeline from that moment."""
-    params = {"m": machine_id, "now": now, "operator": operator}
-    if await setup_active(session, machine_id) == active:
-        return
-    if active:
-        await session.execute(
-            text("INSERT INTO operator_setup_marks (machine_id, start_ts, operator) VALUES (:m, :now, :operator)"),
-            params,
-        )
-    else:
-        await session.execute(
-            text("UPDATE operator_setup_marks SET end_ts = :now WHERE machine_id = :m AND end_ts IS NULL"), params
-        )
-    await mark_dirty(session, {machine_id: now})
 
 
 async def setup_active(session: AsyncSession, machine_id: str) -> bool:

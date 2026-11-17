@@ -275,7 +275,7 @@ export function AdminPage() {
   const tab = tabs.find((x) => x.key === active) ?? tabs[0];
 
   const recalc = async () => {
-    await api("/admin/recalc?hours=24", { method: "POST" });
+    await api("/recalc?hours=24", { method: "POST" });
     setNotice(t.admin.recalcDone);
   };
 

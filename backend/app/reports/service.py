@@ -14,9 +14,9 @@ WITH down AS (
     FROM state_intervals
     WHERE machine_id = ANY(:ids) AND state <> 'RUN' AND start_ts < :end AND COALESCE(end_ts, :now) > :start
 ), ann AS (
-    SELECT id, machine_id, reason_id, start_ts AS s, COALESCE(end_ts, :now) AS e
-    FROM downtime_annotations
-    WHERE machine_id = ANY(:ids) AND start_ts < :end AND COALESCE(end_ts, :now) > :start
+    SELECT id, machine_id, reason_id, start_ts AS s, COALESCE(effective_end_ts, :now) AS e
+    FROM downtime_annotations_resolved
+    WHERE machine_id = ANY(:ids) AND start_ts < :end AND COALESCE(effective_end_ts, :now) > :start
 ), hit AS (
     SELECT d.id AS down_id, d.state, a.reason_id, a.id AS ann_id,
            EXTRACT(EPOCH FROM LEAST(d.e, a.e) - GREATEST(d.s, a.s)) AS seconds

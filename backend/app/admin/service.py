@@ -106,14 +106,24 @@ async def shift_templates(session: AsyncSession, site_id: str) -> list[dict[str,
     return [dict(r._mapping) for r in rows]
 
 
-async def cycle_norms(session: AsyncSession, machine_id: str) -> dict[str, float]:
-    """Seconds per part by program; a machine-specific norm overrides the common one."""
+async def cycle_norms(session: AsyncSession, machine_id: str) -> list[tuple[str, datetime, float, bool]]:
+    """Norm rows for a machine: (program, valid_from, seconds per part, machine-specific)."""
     rows = await session.execute(
         text(
-            "SELECT DISTINCT ON (program) program, ideal_cycle_time_s / parts_per_cycle AS seconds_per_part "
-            "FROM programs WHERE machine_id = :m OR machine_id IS NULL "
-            "ORDER BY program, (machine_id IS NULL), valid_from DESC"
+            "SELECT program, valid_from, ideal_cycle_time_s / parts_per_cycle AS seconds_per_part, "
+            "machine_id IS NOT NULL AS specific FROM programs WHERE machine_id = :m OR machine_id IS NULL"
         ),
         {"m": machine_id},
     )
-    return {r.program: float(r.seconds_per_part) for r in rows}
+    return [(r.program, r.valid_from, float(r.seconds_per_part), bool(r.specific)) for r in rows]
+
+
+async def list_collectors(session: AsyncSession) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        text(
+            "SELECT c.id, c.site_id, c.name, c.version, c.last_heartbeat, "
+            "COALESCE(array_agg(m.id ORDER BY m.id) FILTER (WHERE m.id IS NOT NULL), '{}') AS machine_ids "
+            "FROM collectors c LEFT JOIN machines m ON m.collector_id = c.id GROUP BY c.id ORDER BY c.id"
+        )
+    )
+    return [dict(r._mapping) for r in rows]

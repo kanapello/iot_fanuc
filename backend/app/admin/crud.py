@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -63,7 +63,8 @@ class ProgramIn(BaseModel):
     program: str
     ideal_cycle_time_s: float = Field(gt=0)
     parts_per_cycle: int = Field(default=1, gt=0)
-    valid_from: datetime = datetime.fromisoformat("2000-01-01T00:00:00+00:00")
+    # a new norm applies from now on unless stated otherwise: the past is not rewritten
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class StateRulesIn(BaseModel):
@@ -110,6 +111,13 @@ def _params(resource: Resource, body: BaseModel) -> tuple[dict[str, Any], dict[s
 async def list_rows(session: AsyncSession, resource: Resource) -> list[dict[str, Any]]:
     rows = await session.execute(text(f"SELECT * FROM {resource.table} ORDER BY {resource.order_by}"))
     return [dict(r._mapping) for r in rows]
+
+
+async def get_row(session: AsyncSession, resource: Resource, row_id: str) -> dict[str, Any] | None:
+    row = (
+        await session.execute(text(f"SELECT * FROM {resource.table} WHERE id::text = :row_id"), {"row_id": row_id})
+    ).first()
+    return dict(row._mapping) if row else None
 
 
 async def create_row(session: AsyncSession, resource: Resource, body: BaseModel) -> dict[str, Any]:

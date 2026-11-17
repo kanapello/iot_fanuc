@@ -24,6 +24,35 @@ SUM_FIELDS = (
 )  # fmt: skip
 
 
+class NormTable:
+    """Cycle norms (ideal seconds per part) with their validity periods.
+
+    A norm applies to parts made at or after its ``valid_from`` until a newer
+    one starts, so changing a norm never rewrites the past. A machine-specific
+    norm wins over the common one of the same program.
+    """
+
+    def __init__(self, rows: Iterable[tuple[str, datetime | None, float, bool]] = ()) -> None:
+        """rows: (program, valid_from or None for "always", seconds per part, machine-specific)."""
+        self._rows: dict[str, list[tuple[bool, datetime | None, float]]] = {}
+        for program, valid_from, seconds, specific in rows:
+            self._rows.setdefault(program, []).append((specific, valid_from, seconds))
+
+    @classmethod
+    def constant(cls, norms: Mapping[str, float]) -> NormTable:
+        return cls((program, None, seconds, False) for program, seconds in norms.items())
+
+    def lookup(self, program: str | None, at: datetime) -> float | None:
+        best: tuple[bool, datetime | None, float] | None = None
+        for row in self._rows.get(program or "", ()):
+            specific, valid_from, _ = row
+            if valid_from is not None and valid_from > at:
+                continue
+            if best is None or (specific, valid_from is not None, valid_from) > (best[0], best[1] is not None, best[1]):
+                best = row
+        return None if best is None else best[2]
+
+
 @dataclass(slots=True)
 class OeeResult:
     planned_time_s: float = 0.0
@@ -56,7 +85,8 @@ def ratios(
     """
     availability = run_time_s / planned_time_s if planned_time_s > 0 else None
     performance = None if no_standard or run_time_s <= 0 else ideal_time_s / run_time_s
-    quality = good_parts / total_parts if total_parts > 0 else None
+    # scrap may be recorded later than the parts were made, so one hour can show more scrap than parts
+    quality = max(0.0, good_parts / total_parts) if total_parts > 0 else None
     if availability is None:
         return None, performance, quality, None
     if availability == 0:
@@ -75,7 +105,7 @@ def compute_oee(
     windows: Sequence[Window],
     intervals: Iterable[tuple[str, datetime, datetime | None]],
     parts: Iterable[tuple[datetime, str | None, int]],
-    norms: Mapping[str, float],
+    norms: NormTable,
     scrap: int,
     now: datetime,
     planned_downtime: Sequence[Window] = (),
@@ -84,7 +114,8 @@ def compute_oee(
 
     ``windows``: planned production windows of the period (shift minus planned
     breaks). Downtime annotated with a planned reason is removed from them.
-    Only time up to ``now`` counts. ``norms``: seconds per part by program.
+    Only time up to ``now`` counts. ``scrap`` is taken as recorded, never clipped
+    to the parts of the period: sums over hours then match the shift.
     """
     if not windows:
         return OeeResult()
@@ -101,12 +132,12 @@ def compute_oee(
         if not any(s <= ts < e for s, e in effective):
             continue
         result.total_parts += delta
-        norm = norms.get(program or "")
+        norm = norms.lookup(program, ts)
         if norm is None:
             result.no_standard = True
         else:
             result.ideal_time_s += delta * norm
-    result.scrap_parts = min(scrap, result.total_parts)
+    result.scrap_parts = scrap
     result.good_parts = result.total_parts - result.scrap_parts
     result.availability, result.performance, result.quality, result.oee = ratios(
         result.planned_time_s,

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
     worker_interval_s: float = 2.0
     oee_interval_s: float = 10.0
+    # How far back derived data is recomputed after a change of shifts, norms, rules or reasons.
+    recalc_horizon_days: int = 31
+    seq_check_interval_s: float = 60.0
+    seq_check_window_hours: int = 24
+    collector_offline_after_s: float = 45.0
 
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883

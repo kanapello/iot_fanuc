@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import journal
 from app.admin import service as admin
-from app.oee.calc import OeeResult, aggregate, compute_oee
+from app.oee.calc import NormTable, OeeResult, aggregate, compute_oee
+from app.oee.dirty import mark_oee_dirty, take_oee_dirty
 from app.oee.shifts import Shift, ShiftTemplate, clip, shift_instances
 from app.timeline import service as timeline
 
@@ -48,7 +49,7 @@ async def recompute(
     parts = [(p["ts"], p["program"], p["delta"]) for p in await timeline.get_part_events(session, machine_id, lo, hi)]
     planned = await journal.planned_downtime(session, machine_id, lo, hi, now)
     scrap = [(s["ts"], s["qty"]) for s in await journal.list_scrap(session, [machine_id], lo, hi)]
-    norms = await admin.cycle_norms(session, machine_id)
+    norms = NormTable(await admin.cycle_norms(session, machine_id))
 
     def calc(windows: list[tuple[datetime, datetime]], p0: datetime, p1: datetime) -> OeeResult:
         scrapped = sum(qty for ts, qty in scrap if p0 <= ts < p1)
@@ -95,6 +96,26 @@ async def recompute(
         sql = f"INSERT INTO oee_shift ({_COLUMNS}, shift_name, planned_total_s) "
         sql += f"VALUES ({_VALUES}, :shift_name, :planned_total_s)"
         await session.execute(text(sql), shift_rows)
+
+
+CHUNK = timedelta(days=1)
+
+
+async def process_dirty(session: AsyncSession, machine: dict[str, Any], now: datetime) -> bool:
+    """Recompute one CHUNK of the pending period; the rest stays marked for the next call.
+
+    The mark is removed in the same transaction as the recomputation, so a crash
+    at any point leaves either the mark or the result, never neither.
+    """
+    start = await take_oee_dirty(session, machine["id"])
+    if start is None:
+        return False
+    start = min(start, now)
+    end = min(start + CHUNK, now)
+    await recompute(session, machine, start, end, now)
+    if end < now:
+        await mark_oee_dirty(session, {machine["id"]: end})
+    return True
 
 
 async def current_shift(session: AsyncSession, machine_id: str, now: datetime) -> dict[str, Any] | None:
