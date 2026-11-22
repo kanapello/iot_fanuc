@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.timeline.builder import IDLE, NOT_RUN, STOP, Interval, Rules, Sample, build_intervals, part_events
+from app.timeline.builder import IDLE, NOT_RUN, RUN, STOP, Interval, Rules, Sample, build_intervals, part_events
 
 _SAMPLE_COLUMNS = "ts, connected, mode, run, alarm, emergency, program, part_count"
 
@@ -256,6 +256,65 @@ async def get_intervals(
         {"ids": list(machine_ids), "start": start, "end": end},
     )
     return [dict(r._mapping) for r in rows]
+
+
+async def first_run_at(session: AsyncSession, points: Sequence[tuple[int, datetime]]) -> list[datetime | None]:
+    """For each (machine, moment): the first moment at or after it when the machine was in RUN.
+
+    The moment itself if the machine was running then; None if it has not run since.
+    """
+    if not points:
+        return []
+    rows = await session.execute(
+        text(
+            "SELECT p.n, (SELECT GREATEST(i.start_ts, p.ts) FROM state_intervals i "
+            "WHERE i.machine_id = p.machine_id AND i.state = :run AND (i.end_ts IS NULL OR i.end_ts > p.ts) "
+            "ORDER BY i.start_ts LIMIT 1) AS run_at "
+            "FROM unnest(CAST(:n AS integer[]), CAST(:machines AS bigint[]), CAST(:ts AS timestamptz[])) "
+            "AS p(n, machine_id, ts)"
+        ),
+        {"n": list(range(len(points))), "machines": [m for m, _ in points], "ts": [t for _, t in points], "run": RUN},
+    )
+    found = {r.n: r.run_at for r in rows}
+    return [found.get(n) for n in range(len(points))]
+
+
+async def first_interval_at(session: AsyncSession, machine_ids: Collection[int]) -> dict[int, datetime]:
+    """Where the timeline of each machine begins."""
+    rows = await session.execute(
+        text(
+            "SELECT machine_id, min(start_ts) AS first FROM state_intervals WHERE machine_id = ANY(:ids) "
+            "GROUP BY machine_id"
+        ),
+        {"ids": list(machine_ids)},
+    )
+    return {r.machine_id: r.first for r in rows}
+
+
+async def run_seconds(session: AsyncSession, spans: Sequence[tuple[int, datetime, datetime]]) -> list[float]:
+    """For each (machine, start, end): seconds the machine spent in RUN inside [start, end)."""
+    if not spans:
+        return []
+    rows = await session.execute(
+        text(
+            "SELECT p.n, COALESCE(sum(EXTRACT(EPOCH FROM LEAST(COALESCE(i.end_ts, p.end_ts), p.end_ts) "
+            "- GREATEST(i.start_ts, p.start_ts))), 0) AS seconds "
+            "FROM unnest(CAST(:n AS integer[]), CAST(:machines AS bigint[]), CAST(:starts AS timestamptz[]), "
+            "CAST(:ends AS timestamptz[])) AS p(n, machine_id, start_ts, end_ts) "
+            "LEFT JOIN state_intervals i ON i.machine_id = p.machine_id AND i.state = :run "
+            "AND i.start_ts < p.end_ts AND (i.end_ts IS NULL OR i.end_ts > p.start_ts) "
+            "GROUP BY p.n"
+        ),
+        {
+            "n": list(range(len(spans))),
+            "machines": [m for m, _, _ in spans],
+            "starts": [a for _, a, _ in spans],
+            "ends": [b for _, _, b in spans],
+            "run": RUN,
+        },
+    )
+    found = {r.n: float(r.seconds) for r in rows}
+    return [max(found.get(n, 0.0), 0.0) for n in range(len(spans))]
 
 
 async def get_part_events(

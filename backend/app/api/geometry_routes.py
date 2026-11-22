@@ -16,10 +16,20 @@ from pydantic import BaseModel, Field
 
 from app.admin import journal
 from app.admin import service as admin
-from app.api.deps import FORBIDDEN, NOT_FOUND, CurrentScope, Session, SettingsDep, as_utc, require_machine
+from app.api.deps import (
+    FORBIDDEN,
+    NOT_FOUND,
+    CurrentScope,
+    Session,
+    SettingsDep,
+    VoidBody,
+    as_utc,
+    require_machine,
+)
 from app.core.access import GEOMETRY_EDIT, GEOMETRY_VIEW, OPERATOR_INPUT, Scope
 from app.geometry import service as geometry
 from app.geometry.catalog import ARCS, CATALOG, DIRECTIONS, PLANE_AXES, PLANES
+from app.repairs import records
 
 router = APIRouter(prefix="/api/v1", tags=["geometry"])
 Axis = Literal["X", "Y", "Z"]
@@ -170,10 +180,6 @@ async def update_test(test_id: int, body: TestBody, scope: CurrentScope, session
     except geometry.GeometryInputError as exc:
         raise _bad_input(exc) from exc
     return {"id": test_id}
-
-
-class VoidBody(BaseModel):
-    reason: str = Field(min_length=3, max_length=500)
 
 
 @router.post("/ballbar/tests/{test_id}/void")
@@ -332,7 +338,7 @@ class RepairBody(BaseModel):
 @router.get("/machines/{machine_id}/repairs")
 async def list_repairs(machine_id: int, scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
     _require_geometry(scope, machine_id)
-    return await geometry.list_repairs(session, machine_id)
+    return await records.list_repairs(session, machine_id)
 
 
 @router.post("/machines/{machine_id}/repairs", status_code=status.HTTP_201_CREATED)
@@ -344,18 +350,18 @@ async def add_repair(machine_id: int, body: RepairBody, scope: CurrentScope, ses
         raise _bad_input(ValueError("the repair date is in the future"))
     engineer = body.engineer or scope.name
     return {
-        "id": await geometry.add_repair(session, machine_id, completed_at, body.description, engineer, scope.user_id)
+        "id": await records.add_repair(session, machine_id, completed_at, body.description, engineer, scope.user_id)
     }
 
 
 @router.post("/repairs/{repair_id}/void")
 async def void_repair(repair_id: int, body: VoidBody, scope: CurrentScope, session: Session) -> dict[str, int]:
     """A wrong repair record is voided with a reason, not deleted; it no longer shows on the trend."""
-    repair = await geometry.get_repair(session, repair_id)
+    repair = await records.get_repair(session, repair_id)
     if repair is None:
         raise NOT_FOUND
     _require_geometry(scope, repair["machine_id"], GEOMETRY_EDIT)
     if repair["voided_at"] is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "the record is already voided")
-    await geometry.void_repair(session, repair_id, body.reason)
+    await records.void_repair(session, repair_id, body.reason)
     return {"id": repair_id}

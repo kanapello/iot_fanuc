@@ -21,6 +21,7 @@ from app.api.main import API_ROUTERS, app, ws_live
 from app.core.config import Settings
 from app.core.security import hash_token
 from app.geometry import service as geometry
+from app.repairs import maintenance, records, requests
 from app.worker.__main__ import Worker
 from app.worker.live import live_channel, live_key
 from tests.conftest import Seed, put_samples, seed_reference
@@ -154,9 +155,31 @@ async def world(session_factory: Factory) -> World:
         world.ids["collision_a"] = await journal.add_collision(
             session, a1.machine_id, T0 + timedelta(minutes=5), "acme collision", None
         )
-        world.ids["repair_a"] = await geometry.add_repair(
+        world.ids["repair_a"] = await records.add_repair(
             session, a1.machine_id, T0 + timedelta(minutes=10), "acme repair", "acme", None
         )
+
+        # service repairs of organization A: an alarm, a request opened from it, a maintenance plan with a record
+        alarm_ts = T0 + timedelta(minutes=5)
+        for kind, ts in (("alarm_raised", alarm_ts), ("alarm_cleared", alarm_ts + timedelta(minutes=2))):
+            await session.execute(
+                text(
+                    "INSERT INTO machine_events (msg_id, ts, machine_id, collector_id, seq, type, code, message, "
+                    "payload) VALUES (gen_random_uuid(), :ts, :m, 'col-a1', 1, :kind, 'SV0401', 'acme alarm', '{}')"
+                ),
+                {"ts": ts, "m": a1.machine_id, "kind": kind},
+            )
+        alarm = {"start_ts": alarm_ts, "code": "SV0401", "message": "acme alarm"}
+        world.ids["request_a"] = await requests.create(
+            session, a1.machine_id, "acme request", alarm_ts, alarm, None, "acme master"
+        )
+        world.ids["plan_a"] = await maintenance.create_plan(
+            session, a1.machine_id, "acme plan", 100, T0 - timedelta(days=1), None, None
+        )
+        world.ids["maintenance_record_a"] = await maintenance.add_record(
+            session, world.ids["plan_a"], T0, "acme engineer", None, None
+        )
+        world.ids["alarm_ts"] = int(alarm_ts.timestamp())
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
@@ -188,6 +211,7 @@ class Call:
     params: dict[str, Any] | None = None
     files: dict[str, Any] | None = None
     archive: bool = False  # a route of the geometry archive: it exists only for the service
+    service_only: bool = False  # a route of the service: organization A's administrator gets 403 too
 
 
 def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
@@ -232,6 +256,7 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
     trace = {"direction": "CCW", "angle_deg": [0, 1, 2], "deviation_um": [0, 0, 0]}
     trend = {"group": "setup:XY|100|1000|360", "parameter": "squareness"}
     repair = {"completed_at": FROM, "description": "xyz"}
+    request, plan = w.ids["request_a"], w.ids["plan_a"]
 
     def archive(path: str, **kwargs: Any) -> Call:
         return Call(path, "hidden", archive=True, **kwargs)
@@ -323,6 +348,60 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         ("POST", "/repairs/{repair_id}/void"): [
             archive(f"/repairs/{w.ids['repair_a']}/void", json={"reason": "hacked"})
         ],
+        # service repairs
+        ("GET", "/alarms"): [Call("/alarms", "clean", params=period), Call("/alarms", "empty", params=aimed)],
+        ("GET", "/alarms/frequency"): [
+            Call("/alarms/frequency", "clean", params=period),
+            Call("/alarms/frequency", "empty", params=aimed),
+        ],
+        ("GET", "/machines/{machine_id}/alarm-context"): [
+            Call(
+                f"/machines/{m}/alarm-context",
+                "hidden",
+                params={"ts": datetime.fromtimestamp(w.ids["alarm_ts"], UTC).isoformat()},
+            )
+        ],
+        ("POST", "/repair-requests"): [
+            Call("/repair-requests", "hidden", json={"machine_id": m, "description": "hacked"}),
+            Call(
+                "/repair-requests",
+                "hidden",
+                json={
+                    "machine_id": m,
+                    "alarm_ts": datetime.fromtimestamp(w.ids["alarm_ts"], UTC).isoformat(),
+                    "alarm_code": "SV0401",
+                },
+            ),
+        ],
+        ("GET", "/repair-requests"): [
+            Call("/repair-requests", "clean"),
+            Call("/repair-requests", "empty", params={"machine_id": m}),
+        ],
+        ("GET", "/repair-requests/{request_id}"): [Call(f"/repair-requests/{request}", "hidden")],
+        ("POST", "/repair-requests/{request_id}/status"): [
+            Call(f"/repair-requests/{request}/status", "hidden", json={"status": "accepted", "executor_id": 1})
+        ],
+        ("POST", "/repair-requests/{request_id}/void"): [
+            Call(f"/repair-requests/{request}/void", "hidden", json={"reason": "hacked"})
+        ],
+        ("GET", "/service-engineers"): [Call("/service-engineers", "hidden", service_only=True)],
+        ("GET", "/maintenance"): [
+            Call("/maintenance", "clean"),
+            Call("/maintenance", "empty", params={"machine_id": m}),
+        ],
+        ("POST", "/maintenance-plans"): [
+            Call("/maintenance-plans", "hidden", json={"machine_id": m, "name": "hacked", "interval_run_hours": 1})
+        ],
+        ("PUT", "/maintenance-plans/{plan_id}"): [
+            Call(f"/maintenance-plans/{plan}", "hidden", json={"name": "hacked", "interval_run_hours": 1})
+        ],
+        ("POST", "/maintenance-plans/{plan_id}/records"): [
+            Call(f"/maintenance-plans/{plan}/records", "hidden", json={})
+        ],
+        ("GET", "/maintenance-plans/{plan_id}/records"): [Call(f"/maintenance-plans/{plan}/records", "hidden")],
+        ("POST", "/maintenance-records/{record_id}/void"): [
+            Call(f"/maintenance-records/{w.ids['maintenance_record_a']}/void", "hidden", json={"reason": "hacked"})
+        ],
     }
 
 
@@ -343,7 +422,8 @@ async def _fingerprint(factory: Factory) -> dict[str, Any]:
         "organizations", "sites", "areas", "collectors", "machines", "shift_templates", "downtime_reasons",
         "scrap_reasons", "programs", "state_rules", "users", "memberships", "device_tokens", "downtime_annotations",
         "scrap_records", "operator_setup_marks", "timeline_dirty", "oee_dirty", "ballbar_tests", "ballbar_results",
-        "ballbar_traces", "ballbar_files", "collision_marks", "repair_records",
+        "ballbar_traces", "ballbar_files", "collision_marks", "repair_records", "repair_requests",
+        "repair_request_history", "maintenance_plans", "maintenance_records",
     ]  # fmt: skip
     async with factory() as session:
         result = {}
@@ -388,7 +468,7 @@ async def test_another_organization_sees_nothing_on_any_route(world: World, sess
         async with client(world.tokens[owner]) as http:
             for (method, _template), requests in calls.items():
                 for call in requests:
-                    if method != "GET" or call.archive != (owner == "service"):
+                    if method != "GET" or (call.archive or call.service_only) != (owner == "service"):
                         continue
                     response = await http.request(method, call.path, params=call.params)
                     assert response.status_code == 200, f"{owner} {call.path}: {response.text[:200]}"

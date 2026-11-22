@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import journal
 from app.geometry.catalog import DIRECTIONS, PLANES, check_result
+from app.repairs import records
 
 _TEST_COLUMNS = (
     "t.id, t.machine_id, t.performed_at, t.engineer, t.plane, t.radius_mm, t.feed_mm_min, t.arc_deg, "
@@ -397,7 +398,7 @@ async def events(session: AsyncSession, machine_id: int, since: datetime) -> lis
     ]
     found += [
         {"kind": "repair", "ts": r["completed_at"], "text": r["description"]}
-        for r in await list_repairs(session, machine_id)
+        for r in await records.list_repairs(session, machine_id)
         if r["completed_at"] > since and r["voided_at"] is None
     ]
     return sorted(found, key=lambda e: e["ts"])
@@ -426,7 +427,7 @@ async def trend(
     }
 
 
-# ---------------------------------------------------------------- archive index and repair log
+# ---------------------------------------------------------------- archive index
 
 
 async def overview(session: AsyncSession, machine_ids: Collection[int], now: datetime) -> dict[int, dict[str, Any]]:
@@ -445,54 +446,3 @@ async def overview(session: AsyncSession, machine_ids: Collection[int], now: dat
         days = None if last is None else max(0, math.floor((now - last).total_seconds() / 86400))
         result[machine_id] = {"last_test_at": last, "days_since": days, "tests": count}
     return result
-
-
-async def add_repair(
-    session: AsyncSession, machine_id: int, completed_at: datetime, description: str, engineer: str, user_id: int | None
-) -> int:
-    return int(
-        (
-            await session.execute(
-                text(
-                    "INSERT INTO repair_records (machine_id, completed_at, description, engineer, created_by) "
-                    "VALUES (:m, :at, :description, :engineer, :user) RETURNING id"
-                ),
-                {
-                    "m": machine_id,
-                    "at": completed_at,
-                    "description": description.strip(),
-                    "engineer": engineer.strip(),
-                    "user": user_id,
-                },
-            )
-        ).scalar_one()
-    )
-
-
-async def list_repairs(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
-    """Completed repairs of a machine, newest first, voided ones included."""
-    rows = await session.execute(
-        text(
-            "SELECT id, completed_at, description, engineer, created_at, voided_at, void_reason FROM repair_records "
-            "WHERE machine_id = :m ORDER BY completed_at DESC, id DESC"
-        ),
-        {"m": machine_id},
-    )
-    return [dict(r._mapping) for r in rows]
-
-
-async def get_repair(session: AsyncSession, repair_id: int) -> dict[str, Any] | None:
-    row = (
-        await session.execute(
-            text("SELECT id, machine_id, completed_at, voided_at FROM repair_records WHERE id = :id"), {"id": repair_id}
-        )
-    ).first()
-    return dict(row._mapping) if row else None
-
-
-async def void_repair(session: AsyncSession, repair_id: int, reason: str) -> None:
-    """A wrong record is not deleted: it stays in the log with the reason and leaves the trend."""
-    await session.execute(
-        text("UPDATE repair_records SET voided_at = now(), void_reason = :reason WHERE id = :id"),
-        {"id": repair_id, "reason": reason.strip()},
-    )
