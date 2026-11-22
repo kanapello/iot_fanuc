@@ -4,11 +4,13 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { getToken, setToken } from "./api/client";
 import { AdminPage } from "./features/admin/AdminPage";
+import { AlarmsPage } from "./features/alarms/AlarmsPage";
 import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
 import { LoginPage } from "./features/auth/LoginPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
 import { MachineCardPage } from "./features/geometry/MachineCardPage";
 import { OperatorPage } from "./features/operator/OperatorPage";
+import { RepairsPage } from "./features/repairs/RepairsPage";
 import { ServicePage } from "./features/service/ServicePage";
 import "./index.css";
 import { t } from "./shared/i18n";
@@ -34,6 +36,16 @@ function Shell() {
         {menu?.analytics && (
           <NavLink to="/analytics" className={link}>
             {t.nav.analytics}
+          </NavLink>
+        )}
+        {menu?.alarms && (
+          <NavLink to="/alarms" className={link}>
+            {t.nav.alarms}
+          </NavLink>
+        )}
+        {menu?.repairs && (
+          <NavLink to="/repairs" className={link}>
+            {t.nav.repairs}
           </NavLink>
         )}
         {menu?.service && (
@@ -92,6 +104,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route element={<Shell />}>
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/alarms" element={<AlarmsPage />} />
+            <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/service" element={<ServicePage />} />
             <Route path="/machines/:machineId" element={<MachineCardPage />} />
           </Route>

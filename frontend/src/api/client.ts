@@ -78,6 +78,9 @@ export interface Me {
     structure: boolean;
     users: boolean;
     service: boolean;
+    alarms: boolean;
+    repairs: boolean;
+    repairs_manage: boolean;
   };
   kiosk: { machine_id: number | null; area_id: number | null } | null;
   organizations: { id: number; code: string; name: string }[];
@@ -324,6 +327,113 @@ export interface CollisionMark {
   ts: string;
   comment: string | null;
   operator: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+interface MachinePlace {
+  machine_id: number;
+  machine_name: string;
+  org_name: string;
+  site_name: string;
+  area_name: string | null;
+}
+
+export interface AlarmEpisode extends MachinePlace {
+  code: string | null;
+  message: string | null;
+  category: string | null;
+  start_ts: string;
+  end_ts: string | null;
+  active: boolean;
+  duration_s: number;
+  request_id: number | null;
+}
+
+export interface AlarmFrequency extends MachinePlace {
+  count: number;
+  per_day: number | null;
+  duration_s: number;
+  active: number;
+  codes: { code: string | null; message: string | null; count: number; duration_s: number }[];
+}
+
+export interface TelemetrySample {
+  ts: string;
+  connected: boolean;
+  mode: string | null;
+  run: string | null;
+  program: string | null;
+  alarm: boolean | null;
+  emergency: boolean | null;
+  feed_actual: number | null;
+  spindle_speed: number | null;
+  spindle_load: number | null;
+}
+
+export interface AlarmContext {
+  machine_id: number;
+  from: string;
+  to: string;
+  telemetry: TelemetrySample[];
+  events: { ts: string; type: string; code: string | null; message: string | null }[];
+}
+
+export type RequestStatus = "new" | "accepted" | "in_progress" | "done";
+
+export interface RequestHistory {
+  ts: string;
+  action: string;
+  executor_id: number | null;
+  user_name: string;
+  comment: string | null;
+}
+
+export interface RepairRequest extends MachinePlace {
+  id: number;
+  status: RequestStatus;
+  description: string;
+  alarm_ts: string | null;
+  alarm_code: string | null;
+  alarm_message: string | null;
+  failure_ts: string;
+  created_by_name: string;
+  created_at: string;
+  executor_id: number | null;
+  executor_name: string | null;
+  accepted_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  work_done: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  reaction_s: number | null;
+  restored_at: string | null;
+  restoration_s: number | null;
+  history?: RequestHistory[];
+}
+
+export interface MaintenancePlan extends MachinePlace {
+  id: number;
+  name: string;
+  interval_run_hours: number;
+  counted_from: string;
+  notes: string | null;
+  is_active: boolean;
+  last_done_at: string | null;
+  run_hours: number;
+  remaining_hours: number;
+  used_share: number;
+  status: "ok" | "soon" | "due";
+  run_hours_per_day: number;
+  forecast_at: string | null;
+}
+
+export interface MaintenanceRecord {
+  id: number;
+  performed_at: string;
+  engineer: string;
+  comment: string | null;
   voided_at: string | null;
   void_reason: string | null;
 }
