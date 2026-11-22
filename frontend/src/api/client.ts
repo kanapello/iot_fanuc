@@ -315,4 +315,15 @@ export interface Repair {
   completed_at: string;
   description: string;
   engineer: string;
+  voided_at: string | null;
+  void_reason: string | null;
+}
+
+export interface CollisionMark {
+  id: number;
+  ts: string;
+  comment: string | null;
+  operator: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
 }

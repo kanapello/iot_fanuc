@@ -213,21 +213,30 @@ async def add_collision(
     )
 
 
-async def list_collisions(
-    session: AsyncSession, since: dict[int, datetime]
-) -> dict[int, list[tuple[datetime, str | None, int, str | None]]]:
-    """Collision marks of each machine after the given moment: (ts, comment, id, operator)."""
-    result: dict[int, list[tuple[datetime, str | None, int, str | None]]] = {m: [] for m in since}
-    if not since:
-        return result
+async def list_collisions(session: AsyncSession, machine_id: int, since: datetime) -> list[dict[str, Any]]:
+    """Collision marks of a machine after ``since``, oldest first, voided ones included."""
     rows = await session.execute(
         text(
-            "SELECT c.id, c.machine_id, c.ts, c.comment, c.operator FROM collision_marks c "
-            "JOIN unnest(CAST(:machines AS bigint[]), CAST(:since AS timestamptz[])) AS s(machine_id, since) "
-            "ON s.machine_id = c.machine_id WHERE c.ts > s.since ORDER BY c.ts"
+            "SELECT id, machine_id, ts, comment, operator, created_at, voided_at, void_reason FROM collision_marks "
+            "WHERE machine_id = :m AND ts > :since ORDER BY ts, id"
         ),
-        {"machines": list(since), "since": list(since.values())},
+        {"m": machine_id, "since": since},
     )
-    for r in rows:
-        result[r.machine_id].append((r.ts, r.comment, r.id, r.operator))
-    return result
+    return [dict(r._mapping) for r in rows]
+
+
+async def get_collision(session: AsyncSession, collision_id: int) -> dict[str, Any] | None:
+    row = (
+        await session.execute(
+            text("SELECT id, machine_id, ts, voided_at FROM collision_marks WHERE id = :id"), {"id": collision_id}
+        )
+    ).first()
+    return dict(row._mapping) if row else None
+
+
+async def void_collision(session: AsyncSession, collision_id: int, reason: str) -> None:
+    """A mistaken mark is not deleted: it stays in the list with the reason and leaves the trend."""
+    await session.execute(
+        text("UPDATE collision_marks SET voided_at = now(), void_reason = :reason WHERE id = :id"),
+        {"id": collision_id, "reason": reason.strip()},
+    )

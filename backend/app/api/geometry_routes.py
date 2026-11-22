@@ -300,10 +300,27 @@ async def mark_collision(machine_id: int, body: CollisionBody, scope: CurrentSco
 async def list_collisions(
     machine_id: int, scope: CurrentScope, session: Session, days: Annotated[int, Query(ge=1, le=3650)] = 365
 ) -> list[dict[str, Any]]:
+    """Collision marks, newest first; voided ones stay in the list with the reason."""
     _require_geometry(scope, machine_id)
     since = datetime.now(UTC) - timedelta(days=days)
-    marks = (await journal.list_collisions(session, {machine_id: since}))[machine_id]
-    return [{"id": i, "ts": ts, "comment": comment, "operator": op} for ts, comment, i, op in reversed(marks)]
+    marks = await journal.list_collisions(session, machine_id, since)
+    return [
+        {k: m[k] for k in ("id", "ts", "comment", "operator", "created_at", "voided_at", "void_reason")}
+        for m in reversed(marks)
+    ]
+
+
+@router.post("/collisions/{collision_id}/void")
+async def void_collision(collision_id: int, body: VoidBody, scope: CurrentScope, session: Session) -> dict[str, int]:
+    """A mistaken mark is voided with a reason, not deleted; it no longer shows on the trend."""
+    mark = await journal.get_collision(session, collision_id)
+    if mark is None:
+        raise NOT_FOUND
+    _require_geometry(scope, mark["machine_id"], GEOMETRY_EDIT)
+    if mark["voided_at"] is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the mark is already voided")
+    await journal.void_collision(session, collision_id, body.reason)
+    return {"id": collision_id}
 
 
 class RepairBody(BaseModel):
@@ -329,3 +346,16 @@ async def add_repair(machine_id: int, body: RepairBody, scope: CurrentScope, ses
     return {
         "id": await geometry.add_repair(session, machine_id, completed_at, body.description, engineer, scope.user_id)
     }
+
+
+@router.post("/repairs/{repair_id}/void")
+async def void_repair(repair_id: int, body: VoidBody, scope: CurrentScope, session: Session) -> dict[str, int]:
+    """A wrong repair record is voided with a reason, not deleted; it no longer shows on the trend."""
+    repair = await geometry.get_repair(session, repair_id)
+    if repair is None:
+        raise NOT_FOUND
+    _require_geometry(scope, repair["machine_id"], GEOMETRY_EDIT)
+    if repair["voided_at"] is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the record is already voided")
+    await geometry.void_repair(session, repair_id, body.reason)
+    return {"id": repair_id}

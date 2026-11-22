@@ -284,6 +284,56 @@ async def test_trend_groups_tests_by_template_or_full_set_up(shop: Shop) -> None
         assert (await trend("setup:ZX|1|1|360")).status_code == 422  # no such group
 
 
+async def test_voided_collisions_and_repairs_leave_the_trend(shop: Shop) -> None:
+    """Marks and repairs are voided with a reason like tests: kept in the lists, gone from the trend."""
+    m1 = shop.m1.machine_id
+    async with client(shop.tokens["operator"]) as http:
+        mark = {"ts": (NOW - timedelta(days=50)).isoformat(), "comment": "задел тиски"}
+        wrong_mark = (await http.post(f"/machines/{m1}/collisions", json=mark)).json()["id"]
+    async with client(shop.tokens["service"]) as http:
+        for days in (100, 10):
+            await create(http, m1, ballbar(days, squareness=days / 10))
+        kept_mark = (
+            await http.post(f"/machines/{m1}/collisions", json={"ts": (NOW - timedelta(days=40)).isoformat()})
+        ).json()["id"]
+        repairs = {}
+        for days, text_ in ((60, "замена ШВП оси X"), (30, "не тот станок")):
+            body = {"completed_at": (NOW - timedelta(days=days)).isoformat(), "description": text_}
+            repairs[text_] = (await http.post(f"/machines/{m1}/repairs", json=body)).json()["id"]
+        wrong_repair = repairs["не тот станок"]
+
+    # customers cannot void: the archive does not exist for them
+    for who in CUSTOMER:
+        async with client(shop.tokens[who]) as http:
+            assert (await http.post(f"/collisions/{wrong_mark}/void", json={"reason": "ошибка"})).status_code == 404
+            assert (await http.post(f"/repairs/{wrong_repair}/void", json={"reason": "ошибка"})).status_code == 404
+
+    async with client(shop.tokens["service"]) as http:
+        assert (await http.post(f"/collisions/{wrong_mark}/void", json={"reason": "x"})).status_code == 422
+        assert (await http.post("/collisions/999999/void", json={"reason": "ошибка"})).status_code == 404
+        assert (await http.post("/repairs/999999/void", json={"reason": "ошибка"})).status_code == 404
+        voided = await http.post(f"/collisions/{wrong_mark}/void", json={"reason": "  столкновения не было  "})
+        assert voided.status_code == 200
+        assert (
+            await http.post(f"/repairs/{wrong_repair}/void", json={"reason": "ремонт другого станка"})
+        ).status_code == 200
+        assert (await http.post(f"/collisions/{wrong_mark}/void", json={"reason": "ещё раз"})).status_code == 409
+        assert (await http.post(f"/repairs/{wrong_repair}/void", json={"reason": "ещё раз"})).status_code == 409
+
+        marks = {m["id"]: m for m in (await http.get(f"/machines/{m1}/collisions")).json()}
+        assert (marks[wrong_mark]["void_reason"], marks[kept_mark]["void_reason"]) == ("столкновения не было", None)
+        assert marks[wrong_mark]["voided_at"] is not None and marks[kept_mark]["voided_at"] is None
+        logged = {r["id"]: r for r in (await http.get(f"/machines/{m1}/repairs")).json()}
+        assert logged[wrong_repair]["void_reason"] == "ремонт другого станка"
+        assert logged[repairs["замена ШВП оси X"]]["voided_at"] is None
+
+        group = (await http.get(f"/machines/{m1}/ballbar/groups")).json()[0]["key"]
+        events = (
+            await http.get(f"/machines/{m1}/ballbar/trend", params={"group": group, "parameter": "squareness"})
+        ).json()["events"]
+    assert [(e["kind"], e["text"]) for e in events] == [("repair", "замена ШВП оси X"), ("collision", None)]
+
+
 async def test_archive_index_shows_the_last_test_and_days_since(shop: Shop) -> None:
     async with client(shop.tokens["service"]) as http:
         await create(http, shop.m1.machine_id, ballbar(40, squareness=1))

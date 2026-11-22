@@ -389,13 +389,16 @@ async def groups(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]
 
 
 async def events(session: AsyncSession, machine_id: int, since: datetime) -> list[dict[str, Any]]:
-    """Collision marks and completed repairs after ``since``: events shown on the trend."""
-    collisions = (await journal.list_collisions(session, {machine_id: since}))[machine_id]
-    found = [{"kind": "collision", "ts": ts, "text": comment} for ts, comment, _id, _operator in collisions]
+    """Collision marks and completed repairs after ``since``: events shown on the trend. Voided ones are left out."""
+    found = [
+        {"kind": "collision", "ts": c["ts"], "text": c["comment"]}
+        for c in await journal.list_collisions(session, machine_id, since)
+        if c["voided_at"] is None
+    ]
     found += [
         {"kind": "repair", "ts": r["completed_at"], "text": r["description"]}
         for r in await list_repairs(session, machine_id)
-        if r["completed_at"] > since
+        if r["completed_at"] > since and r["voided_at"] is None
     ]
     return sorted(found, key=lambda e: e["ts"])
 
@@ -467,11 +470,29 @@ async def add_repair(
 
 
 async def list_repairs(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
+    """Completed repairs of a machine, newest first, voided ones included."""
     rows = await session.execute(
         text(
-            "SELECT id, completed_at, description, engineer, created_at FROM repair_records "
+            "SELECT id, completed_at, description, engineer, created_at, voided_at, void_reason FROM repair_records "
             "WHERE machine_id = :m ORDER BY completed_at DESC, id DESC"
         ),
         {"m": machine_id},
     )
     return [dict(r._mapping) for r in rows]
+
+
+async def get_repair(session: AsyncSession, repair_id: int) -> dict[str, Any] | None:
+    row = (
+        await session.execute(
+            text("SELECT id, machine_id, completed_at, voided_at FROM repair_records WHERE id = :id"), {"id": repair_id}
+        )
+    ).first()
+    return dict(row._mapping) if row else None
+
+
+async def void_repair(session: AsyncSession, repair_id: int, reason: str) -> None:
+    """A wrong record is not deleted: it stays in the log with the reason and leaves the trend."""
+    await session.execute(
+        text("UPDATE repair_records SET voided_at = now(), void_reason = :reason WHERE id = :id"),
+        {"id": repair_id, "reason": reason.strip()},
+    )
