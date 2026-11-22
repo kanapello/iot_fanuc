@@ -18,13 +18,16 @@ from app.api.deps import (
     NOT_FOUND,
     AnalyticsMachines,
     CurrentScope,
+    From,
     Session,
     SettingsDep,
+    To,
     ViewMachines,
     as_utc,
     get_redis,
     require,
     require_machine,
+    time_range,
 )
 from app.core.access import (
     ANALYTICS_VIEW,
@@ -34,6 +37,8 @@ from app.core.access import (
     NORMS_EDIT,
     OPERATOR_INPUT,
     REFERENCE_VIEW,
+    REPAIRS_MANAGE,
+    REPAIRS_VIEW,
     STRUCTURE_EDIT,
     USER_ROLES,
     USERS_MANAGE,
@@ -47,16 +52,7 @@ from app.worker.live import read_live
 
 router = APIRouter(prefix="/api/v1")
 RedisDep = Annotated[Redis | None, Depends(get_redis)]
-From = Annotated[datetime, Query(alias="from")]
-To = Annotated[datetime | None, Query(alias="to")]
-
-
-def _range(start: datetime, end: datetime | None) -> tuple[datetime, datetime, datetime]:
-    now = datetime.now(UTC)
-    start, end = as_utc(start), as_utc(end) if end else now
-    if end <= start:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "'to' must be after 'from'")
-    return start, end, now
+_range = time_range
 
 
 def _ids(machines: list[dict[str, Any]]) -> list[int]:
@@ -102,6 +98,9 @@ async def auth_me(scope: CurrentScope, session: Session) -> dict[str, Any]:
             "structure": scope.has(STRUCTURE_EDIT),
             "users": scope.has(USERS_MANAGE),
             "service": scope.has(GEOMETRY_VIEW),
+            "alarms": scope.has(ANALYTICS_VIEW),
+            "repairs": scope.has(REPAIRS_VIEW),
+            "repairs_manage": scope.has(REPAIRS_MANAGE),
         },
         "kiosk": None if kiosk is None else {"machine_id": kiosk.machine_id, "area_id": kiosk.area_id},
         "organizations": [o for o in tree["organizations"] if o["id"] in scope.visible_org_ids],

@@ -145,6 +145,18 @@ async def user_memberships(session: AsyncSession, user_ids: Collection[int]) -> 
     return result
 
 
+async def users_with_role(session: AsyncSession, role: str) -> list[dict[str, Any]]:
+    """Active users holding ``role`` somewhere (the executors of repair requests hold "service")."""
+    rows = await session.execute(
+        text(
+            "SELECT u.id, u.login, u.full_name FROM users u WHERE u.is_active AND EXISTS ("
+            "SELECT 1 FROM memberships m WHERE m.user_id = u.id AND m.role = :role) ORDER BY u.full_name, u.login"
+        ),
+        {"role": role},
+    )
+    return [dict(r._mapping) for r in rows]
+
+
 async def create_user(session: AsyncSession, login_name: str, password: str, full_name: str) -> int:
     return int(
         (

@@ -24,11 +24,18 @@ USERS_MANAGE = "users.manage"  # users and their roles
 COLLECTORS_VIEW = "collectors.view"  # collector health
 GEOMETRY_VIEW = "geometry.view"  # internal archive of the service: ballbar tests, trends, collision marks, repairs
 GEOMETRY_EDIT = "geometry.edit"  # enter ballbar tests, upload originals, record repairs
+REPAIRS_VIEW = "repairs.view"  # repair requests and the maintenance schedule of the machines
+REPAIRS_REQUEST = "repairs.request"  # open a repair request: from an alarm or by hand
+REPAIRS_MANAGE = "repairs.manage"  # service: take requests through to done, maintenance plans and records
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "operator": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),
-    "master": frozenset({MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW}),
-    "engineer": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW}),
+    "master": frozenset(
+        {MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW, REPAIRS_VIEW, REPAIRS_REQUEST}
+    ),
+    "engineer": frozenset(
+        {MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW, REPAIRS_VIEW, REPAIRS_REQUEST}
+    ),
     "admin": frozenset(
         {
             MACHINE_VIEW,
@@ -41,11 +48,25 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             STRUCTURE_EDIT,
             USERS_MANAGE,
             COLLECTORS_VIEW,
+            REPAIRS_VIEW,
+            REPAIRS_REQUEST,
         }
     ),
     # employee of the service company: machines, states, alarms and running hours of every customer;
-    # keeps the internal archive of geometric accuracy tests (ADR 0005). Customers have no geometry rights.
-    "service": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, COLLECTORS_VIEW, GEOMETRY_VIEW, GEOMETRY_EDIT}),
+    # works repair requests and maintenance (ADR 0006); keeps the internal archive of geometric accuracy
+    # tests (ADR 0005). Customers have no geometry rights.
+    "service": frozenset(
+        {
+            MACHINE_VIEW,
+            ANALYTICS_VIEW,
+            COLLECTORS_VIEW,
+            GEOMETRY_VIEW,
+            GEOMETRY_EDIT,
+            REPAIRS_VIEW,
+            REPAIRS_REQUEST,
+            REPAIRS_MANAGE,
+        }
+    ),
     # device tokens
     "kiosk": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),  # operator screen of one machine
     "display": frozenset({MACHINE_VIEW}),  # TV dashboard of one area

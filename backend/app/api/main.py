@@ -15,11 +15,12 @@ from redis.asyncio import Redis
 
 from app.admin import identity
 from app.admin import service as admin
-from app.api import geometry_routes, routes
+from app.api import geometry_routes, repairs_routes, routes
 from app.core.config import get_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
 from app.geometry import demo as geometry_demo
+from app.repairs import demo as repairs_demo
 from app.worker.live import live_channel, read_live
 
 log = logging.getLogger("app.api")
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await identity.bootstrap(session, settings)
         if settings.demo_data:
             await geometry_demo.seed(session, datetime.now(UTC))
+            await repairs_demo.seed(session, datetime.now(UTC))
     yield
     await app.state.redis.aclose()
     await engine.dispose()
@@ -45,7 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Machine Monitor API", version="0.4.0", lifespan=lifespan)
 
 # Every REST router of the application. The isolation test walks the routes of exactly this list.
-API_ROUTERS = (routes.router, geometry_routes.router)
+API_ROUTERS = (routes.router, geometry_routes.router, repairs_routes.router)
 for api_router in API_ROUTERS:
     app.include_router(api_router)
 

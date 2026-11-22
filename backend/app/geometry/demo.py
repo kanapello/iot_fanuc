@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.admin import journal
 from app.geometry import service as geometry
 from app.geometry.catalog import PLANE_AXES
+from app.repairs import records
 
 ENGINEER = "Демо-данные"
 
@@ -133,7 +134,7 @@ async def seed(session: AsyncSession, now: datetime) -> None:
         return await geometry.create_test(session, machines[code], data, None)
 
     async def repair(code: str, days_ago: float, description: str) -> None:
-        await geometry.add_repair(session, machines[code], now - timedelta(days=days_ago), description, ENGINEER, None)
+        await records.add_repair(session, machines[code], now - timedelta(days=days_ago), description, ENGINEER, None)
 
     async def collision(code: str, days_ago: float, comment: str) -> None:
         await journal.add_collision(session, machines[code], now - timedelta(days=days_ago), comment, "оператор")
