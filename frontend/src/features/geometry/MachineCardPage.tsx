@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type BallbarTest, type Machine, type Repair } from "../../api/client";
+import { api, type BallbarTest, type CollisionMark, type Machine, type Repair } from "../../api/client";
 import { t } from "../../shared/i18n";
 import { useMe } from "../../shared/session";
 import { stateColor, stateLabel } from "../../shared/states";
@@ -33,11 +33,57 @@ function LastTestCard({ tests }: { tests: BallbarTest[] | undefined }) {
   );
 }
 
+/** A voided mark or repair stays in the list, struck through, with the reason; it leaves the trend. */
+function VoidableRow({
+  voidedAt,
+  voidReason,
+  prompt,
+  path,
+  onError,
+  children,
+}: {
+  voidedAt: string | null;
+  voidReason: string | null;
+  prompt: string;
+  path: string;
+  onError: (message: string) => void;
+  children: React.ReactNode;
+}) {
+  const client = useQueryClient();
+  const onVoid = async () => {
+    const reason = window.prompt(prompt);
+    if (!reason) return;
+    try {
+      await api(path, { method: "POST", body: { reason } });
+      await refreshArchive(client);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : t.common.error);
+    }
+  };
+  return (
+    <div className="flex items-start gap-2 text-sm">
+      <div className={`flex-1 ${voidedAt ? "text-slate-500" : ""}`}>
+        <span className={voidedAt ? "line-through" : ""}>{children}</span>
+        {voidedAt && (
+          <span className="ml-2 rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300">
+            {t.geometry.voidedRecord}: {voidReason}
+          </span>
+        )}
+      </div>
+      {!voidedAt && (
+        <button className="text-xs text-slate-400 hover:text-red-300 hover:underline" onClick={onVoid}>
+          {t.geometry.void}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function CollisionsCard({ machineId }: { machineId: number }) {
   const client = useQueryClient();
   const { data: marks } = useQuery({
     queryKey: ["ballbar-collisions", machineId],
-    queryFn: () => api<{ id: number; ts: string; comment: string | null; operator: string | null }[]>(`/machines/${machineId}/collisions`),
+    queryFn: () => api<CollisionMark[]>(`/machines/${machineId}/collisions`),
   });
   const [comment, setComment] = useState("");
   const [notice, setNotice] = useState("");
@@ -57,9 +103,9 @@ function CollisionsCard({ machineId }: { machineId: number }) {
       <h3 className="font-semibold">{t.geometry.collisions}</h3>
       {!marks?.length && <p className="text-sm text-slate-400">{t.common.noData}</p>}
       {(marks ?? []).slice(0, 5).map((m) => (
-        <div key={m.id} className="text-sm">
+        <VoidableRow key={m.id} voidedAt={m.voided_at} voidReason={m.void_reason} prompt={t.geometry.voidMarkReason} path={`/collisions/${m.id}/void`} onError={setNotice}>
           {new Date(m.ts).toLocaleString("ru-RU")} · {m.comment ?? "—"} {m.operator ? `(${m.operator})` : ""}
-        </div>
+        </VoidableRow>
       ))}
       <div className="flex gap-2">
         <input className={`${input} flex-1`} placeholder={t.geometry.collisionComment} value={comment} onChange={(e) => setComment(e.target.value)} />
@@ -104,9 +150,9 @@ function RepairsCard({ machineId }: { machineId: number }) {
       <h3 className="font-semibold">{t.geometry.repairs}</h3>
       {!repairs?.length && <p className="text-sm text-slate-400">{t.common.noData}</p>}
       {(repairs ?? []).slice(0, 5).map((r) => (
-        <div key={r.id} className="text-sm">
+        <VoidableRow key={r.id} voidedAt={r.voided_at} voidReason={r.void_reason} prompt={t.geometry.voidRepairReason} path={`/repairs/${r.id}/void`} onError={setError}>
           {formatDate(r.completed_at)} · {r.description} {r.engineer ? `(${r.engineer})` : ""}
-        </div>
+        </VoidableRow>
       ))}
       {error && <p className="text-sm text-red-300">{error}</p>}
       <div className="flex flex-wrap gap-2">

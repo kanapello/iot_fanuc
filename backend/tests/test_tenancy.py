@@ -151,8 +151,12 @@ async def world(session_factory: Factory) -> World:
         )
         world.ids["ballbar_file_a"] = stored["id"]
         await geometry.put_trace(session, world.ids["ballbar_a"], "CW", [0.0, 120.0, 240.0], [1.0, -1.0, 0.5], None)
-        await journal.add_collision(session, a1.machine_id, T0 + timedelta(minutes=5), "acme collision", None)
-        await geometry.add_repair(session, a1.machine_id, T0 + timedelta(minutes=10), "acme repair", "acme", None)
+        world.ids["collision_a"] = await journal.add_collision(
+            session, a1.machine_id, T0 + timedelta(minutes=5), "acme collision", None
+        )
+        world.ids["repair_a"] = await geometry.add_repair(
+            session, a1.machine_id, T0 + timedelta(minutes=10), "acme repair", "acme", None
+        )
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
@@ -313,6 +317,12 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         ("GET", "/machines/{machine_id}/collisions"): [archive(f"/machines/{m}/collisions")],
         ("GET", "/machines/{machine_id}/repairs"): [archive(f"/machines/{m}/repairs")],
         ("POST", "/machines/{machine_id}/repairs"): [archive(f"/machines/{m}/repairs", json=repair)],
+        ("POST", "/collisions/{collision_id}/void"): [
+            archive(f"/collisions/{w.ids['collision_a']}/void", json={"reason": "hacked"})
+        ],
+        ("POST", "/repairs/{repair_id}/void"): [
+            archive(f"/repairs/{w.ids['repair_a']}/void", json={"reason": "hacked"})
+        ],
     }
 
 
@@ -393,7 +403,7 @@ async def test_customers_do_not_see_the_geometry_archive_of_their_own_machines(
     calls = [
         (method, call) for (method, _t), requests in foreign_calls(world).items() for call in requests if call.archive
     ]
-    assert len(calls) == 16  # every geometry route except marking a collision
+    assert len(calls) == 18  # every geometry route except marking a collision
     before = await _fingerprint(session_factory)
     for who in ("admin_a", "engineer_a1", "master_a1", "operator_a1", "kiosk_a", "display_a"):
         async with client(world.tokens[who]) as http:
