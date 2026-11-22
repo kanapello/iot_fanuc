@@ -142,13 +142,6 @@ class Scope:
             for g in self.grants
         )
 
-    def global_authority(self, permission: str) -> bool:
-        """Authority over data shared by every organization (e.g. tolerances of a machine model)."""
-        return self.superadmin or any(
-            g.allows(permission) and g.org_id is None and g.machine_id is None and g.area_id is None
-            for g in self.grants
-        )
-
     def has(self, permission: str) -> bool:
         return self.superadmin or any(g.allows(permission) for g in self.grants)
 

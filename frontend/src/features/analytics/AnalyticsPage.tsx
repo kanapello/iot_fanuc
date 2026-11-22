@@ -244,9 +244,13 @@ export function AnalyticsPage() {
               return (
                 <tr key={m.id} className="tabular border-t border-slate-800">
                   <td className="px-2 py-1">
-                    <Link className="text-sky-400 hover:underline" to={`/machines/${m.id}`}>
-                      {m.name}
-                    </Link>
+                    {me?.menu.service ? (
+                      <Link className="text-sky-400 hover:underline" to={`/machines/${m.id}`}>
+                        {m.name}
+                      </Link>
+                    ) : (
+                      m.name
+                    )}
                   </td>
                   <td className="px-2 py-1">{row ? formatDuration(row.planned_time_s) : "—"}</td>
                   <td className="px-2 py-1">{row ? formatDuration(row.run_time_s) : "—"}</td>
