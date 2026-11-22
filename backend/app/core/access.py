@@ -22,15 +22,13 @@ REFERENCE_EDIT = "reference.edit"  # shifts, reasons, rules
 STRUCTURE_EDIT = "structure.edit"  # sites, areas, machines, collectors, kiosk tokens
 USERS_MANAGE = "users.manage"  # users and their roles
 COLLECTORS_VIEW = "collectors.view"  # collector health
-GEOMETRY_VIEW = "geometry.view"  # ballbar tests, tolerances, next check, service worklist
-GEOMETRY_EDIT = "geometry.edit"  # enter ballbar tests, upload originals, machine tolerances and check policy
+GEOMETRY_VIEW = "geometry.view"  # internal archive of the service: ballbar tests, trends, collision marks, repairs
+GEOMETRY_EDIT = "geometry.edit"  # enter ballbar tests, upload originals, record repairs
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "operator": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),
-    "master": frozenset({MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW, GEOMETRY_VIEW}),
-    "engineer": frozenset(
-        {MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW, GEOMETRY_VIEW, GEOMETRY_EDIT}
-    ),
+    "master": frozenset({MACHINE_VIEW, OPERATOR_INPUT, ANALYTICS_VIEW, JOURNAL_EDIT, REFERENCE_VIEW}),
+    "engineer": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, REFERENCE_VIEW, NORMS_EDIT, COLLECTORS_VIEW}),
     "admin": frozenset(
         {
             MACHINE_VIEW,
@@ -43,12 +41,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             STRUCTURE_EDIT,
             USERS_MANAGE,
             COLLECTORS_VIEW,
-            GEOMETRY_VIEW,
-            GEOMETRY_EDIT,
         }
     ),
     # employee of the service company: machines, states, alarms and running hours of every customer;
-    # performs geometric accuracy checks on them (ADR 0005)
+    # keeps the internal archive of geometric accuracy tests (ADR 0005). Customers have no geometry rights.
     "service": frozenset({MACHINE_VIEW, ANALYTICS_VIEW, COLLECTORS_VIEW, GEOMETRY_VIEW, GEOMETRY_EDIT}),
     # device tokens
     "kiosk": frozenset({MACHINE_VIEW, OPERATOR_INPUT}),  # operator screen of one machine
