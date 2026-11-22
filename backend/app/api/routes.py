@@ -476,19 +476,55 @@ def _check_membership(scope: Scope, membership: MembershipIn) -> None:
         raise FORBIDDEN
 
 
-async def _managed_user(scope: Scope, session: Session, user_id: int) -> dict[str, Any]:
-    user = next((u for u in await identity.list_users(session, _managed_orgs(scope)) if u["id"] == user_id), None)
-    if user is None:
+def _owns_account(scope: Scope, is_superadmin: bool, memberships: list[dict[str, Any]]) -> bool:
+    """The caller administers every role the user holds, wherever it is.
+
+    Only then may they change the password, disable the account or take roles
+    away: a site administrator cannot touch the organization administrator, and
+    the administrator of organization B cannot touch a person who also works for A.
+    A superadmin, a service engineer and a user without roles belong to the superadmin.
+    """
+    if scope.superadmin:
+        return True
+    if is_superadmin or not memberships:
+        return False
+    return all(
+        m["org_id"] is not None and scope.can_node(USERS_MANAGE, m["org_id"], m["site_id"], m["area_id"])
+        for m in memberships
+    )
+
+
+async def _visible_user(scope: Scope, session: Session, user_id: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A user with a role in an organization the caller manages users of (404 otherwise) and all their roles."""
+    user = await identity.get_user(session, user_id)
+    memberships = (await identity.user_memberships(session, [user_id])).get(user_id, [])
+    managed = _managed_orgs(scope)
+    if user is None or (managed is not None and not any(m["org_id"] in managed for m in memberships)):
         raise NOT_FOUND
-    if user["is_superadmin"] and not scope.superadmin:
+    return user, memberships
+
+
+async def _owned_account(scope: Scope, session: Session, user_id: int) -> None:
+    """403 unless the caller administers every role of the user (see ``_owns_account``)."""
+    user, memberships = await _visible_user(scope, session, user_id)
+    if not _owns_account(scope, user["is_superadmin"], memberships):
         raise FORBIDDEN
-    return user
 
 
 @router.get("/users", tags=["users"])
 async def list_users(scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
+    """Users of the caller's organizations, with their roles there.
+
+    ``manageable`` says whether the caller may change the account (password,
+    disabling, taking roles away): only when every role of the user, including
+    roles in other organizations, lies in a node the caller administers.
+    """
     require(scope, USERS_MANAGE)
-    return await identity.list_users(session, _managed_orgs(scope))
+    users = await identity.list_users(session, _managed_orgs(scope))
+    roles = await identity.user_memberships(session, [u["id"] for u in users])
+    for user in users:
+        user["manageable"] = _owns_account(scope, user["is_superadmin"], roles.get(user["id"], []))
+    return users
 
 
 @router.post("/users", tags=["users"], status_code=status.HTTP_201_CREATED)
@@ -507,22 +543,27 @@ async def create_user(body: UserIn, scope: CurrentScope, session: Session) -> di
 
 @router.put("/users/{user_id}", tags=["users"])
 async def update_user(user_id: int, body: UserUpdate, scope: CurrentScope, session: Session) -> dict[str, int]:
+    """Name, password, disabling: only for an account whose every role the caller administers."""
     require(scope, USERS_MANAGE)
-    await _managed_user(scope, session, user_id)
+    await _owned_account(scope, session, user_id)
     await identity.update_user(session, user_id, body.full_name, body.password, body.is_active)
     return {"id": user_id}
 
 
 @router.post("/users/{user_id}/memberships", tags=["users"], status_code=status.HTTP_201_CREATED)
 async def add_membership(user_id: int, body: MembershipIn, scope: CurrentScope, session: Session) -> dict[str, int]:
+    """A new role on a node the caller administers; it opens only that node to the user."""
     require(scope, USERS_MANAGE)
-    await _managed_user(scope, session, user_id)
+    user, _ = await _visible_user(scope, session, user_id)
+    if user["is_superadmin"] and not scope.superadmin:
+        raise FORBIDDEN
     _check_membership(scope, body)
     return {"id": await identity.add_membership(session, user_id, body.role, body.org_id, body.site_id, body.area_id)}
 
 
 @router.delete("/memberships/{membership_id}", tags=["users"], status_code=status.HTTP_204_NO_CONTENT)
 async def delete_membership(membership_id: int, scope: CurrentScope, session: Session) -> None:
+    """Taking a role away: the role must be on the caller's node and the whole account must be theirs."""
     require(scope, USERS_MANAGE)
     row = await identity.get_membership(session, membership_id)
     if row is None or (row["org_id"] is None and not scope.superadmin):
@@ -532,6 +573,7 @@ async def delete_membership(membership_id: int, scope: CurrentScope, session: Se
             raise NOT_FOUND
         if not scope.can_node(USERS_MANAGE, row["org_id"], row["site_id"], row["area_id"]):
             raise FORBIDDEN
+    await _owned_account(scope, session, row["user_id"])
     await identity.delete_membership(session, membership_id)
 
 

@@ -19,6 +19,8 @@ interface User {
   full_name: string;
   is_active: boolean;
   is_superadmin: boolean;
+  // every role of the user lies in a node the caller administers: password, disabling, taking roles away
+  manageable: boolean;
   memberships: Membership[];
 }
 
@@ -113,12 +115,14 @@ export function UsersPanel({ me }: { me: Me }) {
                     <div key={m.id} className="flex items-center gap-2">
                       <span className="rounded bg-slate-700 px-2 py-0.5">{roleLabel(m.role)}</span>
                       <span className="text-slate-300">{nodeLabel(me, m.org_id, m.site_id, m.area_id)}</span>
-                      <button
-                        className="text-xs text-red-300 hover:underline"
-                        onClick={() => window.confirm(t.users.confirmRemoveRole) && run(() => api(`/memberships/${m.id}`, { method: "DELETE" }))}
-                      >
-                        {t.users.removeRole}
-                      </button>
+                      {user.manageable && (
+                        <button
+                          className="text-xs text-red-300 hover:underline"
+                          onClick={() => window.confirm(t.users.confirmRemoveRole) && run(() => api(`/memberships/${m.id}`, { method: "DELETE" }))}
+                        >
+                          {t.users.removeRole}
+                        </button>
+                      )}
                     </div>
                   ))}
                   {!user.is_superadmin && (
@@ -130,7 +134,10 @@ export function UsersPanel({ me }: { me: Me }) {
                   )}
                 </td>
                 <td className="whitespace-nowrap px-2 py-2 text-right">
-                  {!user.is_superadmin && (
+                  {!user.is_superadmin && !user.manageable && (
+                    <span className="block max-w-xs whitespace-normal text-left text-xs text-slate-400">{t.users.notManageable}</span>
+                  )}
+                  {!user.is_superadmin && user.manageable && (
                     <span className="space-x-2">
                       <button
                         className={button}

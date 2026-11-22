@@ -124,6 +124,7 @@ export const t = {
     activate: "Включить",
     superadmin: "суперадмин",
     confirmRemoveRole: "Отозвать роль?",
+    notManageable: "Есть роли вне ваших узлов: пароль, отключение и роли меняет администратор выше",
   },
   geometry: {
     title: "Геометрия",

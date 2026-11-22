@@ -572,6 +572,106 @@ async def test_roles_are_granted_only_inside_the_own_organization(world: World) 
         assert (await http.get("/machines")).status_code == 401
 
 
+async def log_in(login: str, password: str) -> str | None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test/api/v1") as http:
+        response = await http.post("/auth/login", json={"username": login, "password": password})
+    return str(response.json()["token"]) if response.status_code == 200 else None
+
+
+async def roles_of(world: World, login: str) -> list[dict[str, Any]]:
+    """Every role of a user, as the superadmin sees it."""
+    async with client(world.tokens["superadmin"]) as http:
+        users = (await http.get("/users")).json()
+    memberships: list[dict[str, Any]] = next(u["memberships"] for u in users if u["login"] == login)
+    return memberships
+
+
+async def test_site_admin_cannot_change_the_organization_admin(world: World) -> None:
+    """An account is changed only by someone who administers every role of it."""
+    a1, a2 = world.a1, world.a2
+    async with client(world.tokens["admin_a"]) as http:
+        site_admin = {"role": "admin", "org_id": a1.org_id, "site_id": a1.site_id}
+        assert (
+            await http.post("/users", json={"login": "acme-site-admin", "password": PASSWORD, "membership": site_admin})
+        ).status_code == 201
+        # the engineer of site a1 also works at site a2
+        grant = {"role": "operator", "org_id": a2.org_id, "site_id": a2.site_id, "area_id": a2.area_id}
+        assert (await http.post(f"/users/{world.ids['user_engineer_a1']}/memberships", json=grant)).status_code == 201
+    token = await log_in("acme-site-admin", PASSWORD)
+    assert token is not None
+    org_admin, engineer, master = (world.ids[f"user_{k}"] for k in ("admin_a", "engineer_a1", "master_a1"))
+    (org_admin_role,) = await roles_of(world, "acme-admin")
+    engineer_roles = await roles_of(world, "acme-engineer")
+
+    async with client(token) as http:
+        users = {u["login"]: u for u in (await http.get("/users")).json()}
+        assert users["acme-admin"]["manageable"] is False
+        assert users["acme-engineer"]["manageable"] is False  # one of the roles is at another site
+        assert users["acme-master"]["manageable"] is True
+        for target in (org_admin, engineer):
+            for change in ({"password": "taken-over"}, {"is_active": False}, {"full_name": "renamed"}):
+                assert (await http.put(f"/users/{target}", json=change)).status_code == 403, (target, change)
+        assert (await http.delete(f"/memberships/{org_admin_role['id']}")).status_code == 403
+        # the engineer's role at the own site may not be taken away either: the account is not fully the caller's
+        own_site_role = next(m for m in engineer_roles if m["site_id"] == a1.site_id)
+        assert (await http.delete(f"/memberships/{own_site_role['id']}")).status_code == 403
+        # a user whose every role is on the own site is the site administrator's
+        assert (await http.put(f"/users/{master}", json={"password": "new-master-password"})).status_code == 200
+
+    assert await log_in("acme-admin", PASSWORD) is not None
+    assert await log_in("acme-admin", "taken-over") is None
+    assert await log_in("acme-engineer", PASSWORD) is not None
+    assert await log_in("acme-master", "new-master-password") is not None
+    assert await roles_of(world, "acme-admin") == [org_admin_role]
+    assert await roles_of(world, "acme-engineer") == engineer_roles
+    async with client(world.tokens["admin_a"]) as http:
+        users = {u["login"]: u for u in (await http.get("/users")).json()}
+        assert users["acme-admin"]["full_name"] == "acme-admin" and users["acme-admin"]["is_active"]
+        # the organization administrator holds all of the engineer's roles
+        assert users["acme-engineer"]["manageable"] is True
+        assert (await http.put(f"/users/{engineer}", json={"password": "by-org-admin"})).status_code == 200
+    assert await log_in("acme-engineer", "by-org-admin") is not None
+
+
+async def test_admin_of_b_cannot_change_a_user_who_also_works_for_a(world: World) -> None:
+    b = world.b
+    shared = world.ids["user_engineer_a1"]
+    (role_a,) = await roles_of(world, "acme-engineer")
+    async with client(world.tokens["superadmin"]) as http:
+        grant = {"role": "operator", "org_id": b.org_id, "site_id": b.site_id, "area_id": b.area_id}
+        granted = await http.post(f"/users/{shared}/memberships", json=grant)
+        assert granted.status_code == 201
+    role_b = granted.json()["id"]
+
+    async with client(world.tokens["admin_b"]) as http:
+        users = {u["login"]: u for u in (await http.get("/users")).json()}
+        assert users["acme-engineer"]["manageable"] is False
+        assert [m["id"] for m in users["acme-engineer"]["memberships"]] == [role_b]  # roles in A stay hidden
+        for change in ({"password": "taken-over"}, {"is_active": False}, {"full_name": "renamed"}):
+            assert (await http.put(f"/users/{shared}", json=change)).status_code == 403, change
+        assert (await http.delete(f"/memberships/{role_b}")).status_code == 403
+        assert (await http.delete(f"/memberships/{role_a['id']}")).status_code == 404
+    # nor may the administrator of A: the user also works for B
+    async with client(world.tokens["admin_a"]) as http:
+        users = {u["login"]: u for u in (await http.get("/users")).json()}
+        assert users["acme-engineer"]["manageable"] is False
+        assert [m["id"] for m in users["acme-engineer"]["memberships"]] == [role_a["id"]]
+        assert (await http.put(f"/users/{shared}", json={"password": "taken-over"})).status_code == 403
+        assert (await http.put(f"/users/{shared}", json={"is_active": False})).status_code == 403
+        assert (await http.delete(f"/memberships/{role_a['id']}")).status_code == 403
+
+    assert await log_in("acme-engineer", PASSWORD) is not None
+    assert await log_in("acme-engineer", "taken-over") is None
+    assert [m["id"] for m in await roles_of(world, "acme-engineer")] == [role_a["id"], role_b]
+    async with client(world.tokens["engineer_a1"]) as http:
+        assert (await http.get("/machines")).status_code == 200  # still active
+    # the superadmin administers every account
+    async with client(world.tokens["superadmin"]) as http:
+        assert (await http.put(f"/users/{shared}", json={"password": "by-superadmin"})).status_code == 200
+    assert await log_in("acme-engineer", "by-superadmin") is not None
+
+
 async def test_site_references_override_organization_defaults(world: World, session_factory: Factory) -> None:
     a = world.a1
     async with client(world.tokens["admin_a"]) as http:
