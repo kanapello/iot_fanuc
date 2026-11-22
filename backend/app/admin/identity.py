@@ -121,6 +121,30 @@ async def list_users(session: AsyncSession, org_ids: Collection[int] | None) -> 
     return [dict(r._mapping) for r in rows]
 
 
+async def get_user(session: AsyncSession, user_id: int) -> dict[str, Any] | None:
+    row = (
+        await session.execute(
+            text("SELECT id, login, full_name, is_active, is_superadmin FROM users WHERE id = :id"), {"id": user_id}
+        )
+    ).first()
+    return dict(row._mapping) if row else None
+
+
+async def user_memberships(session: AsyncSession, user_ids: Collection[int]) -> dict[int, list[dict[str, Any]]]:
+    """Every role of the given users, in any organization: who may change an account depends on all of them."""
+    rows = await session.execute(
+        text(
+            "SELECT id, user_id, role, org_id, site_id, area_id FROM memberships "
+            "WHERE user_id = ANY(:users) ORDER BY id"
+        ),
+        {"users": list(user_ids)},
+    )
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        result.setdefault(row.user_id, []).append(dict(row._mapping))
+    return result
+
+
 async def create_user(session: AsyncSession, login_name: str, password: str, full_name: str) -> int:
     return int(
         (
