@@ -1,6 +1,6 @@
-"""Demo geometric accuracy data for the simulator stand (only with MM_DEMO_DATA=true).
+"""Demo data of the geometry archive for the simulator stand (only with MM_DEMO_DATA=true).
 
-All values are made up and marked as demo: engineer "Демо-данные", template "Демо".
+All values are made up and marked as demo: engineer "Демо-данные", templates "Демо ...".
 The circle points are synthesized from the entered parameters to show the polar plot.
 """
 
@@ -9,35 +9,20 @@ from __future__ import annotations
 import math
 import random
 from datetime import datetime, timedelta
-from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import journal
 from app.geometry import service as geometry
-from app.geometry.schedule import Policy
+from app.geometry.catalog import PLANE_AXES
 
-MILL, LATHE = "ВФ-500", "ТЦ-250"
 ENGINEER = "Демо-данные"
-
-MODEL_TOLERANCES: dict[str, dict[str, float]] = {
-    MILL: {
-        "circularity": 20, "circular_deviation": 25, "circular_hysteresis": 8, "squareness": 15, "backlash": 5,
-        "reversal_spike": 6, "lateral_play": 4, "cyclic_error": 3, "servo_mismatch": 1.0, "scaling_error": 30,
-        "straightness": 6,
-    },
-    LATHE: {
-        "circularity": 15, "circular_deviation": 20, "circular_hysteresis": 6, "squareness": 12, "backlash": 4,
-        "reversal_spike": 5, "lateral_play": 4, "cyclic_error": 3, "servo_mismatch": 0.8, "scaling_error": 25,
-        "straightness": 5,
-    },
-}  # fmt: skip
 
 
 def _results(plane: str, wear: float) -> list[geometry.ResultIn]:
     """A plausible set of results; ``wear`` from 0 (new) to 1 (worn) moves them towards the limits."""
-    a, b = geometry.PLANE_AXES[plane]
+    a, b = PLANE_AXES[plane]
     return [
         geometry.ResultIn("circularity", round(8 + 8 * wear, 1)),
         geometry.ResultIn("circularity", round(7 + 7 * wear, 1), direction="CW"),
@@ -114,11 +99,11 @@ def demo_pdf(title: str) -> bytes:
 
 async def seed(session: AsyncSession, now: datetime) -> None:
     """Fill the demo organization once; does nothing if it already has ballbar tests."""
-    machines: dict[str, dict[str, Any]] = {
-        r.code: dict(r._mapping)
+    machines: dict[str, int] = {
+        r.code: r.id
         for r in await session.execute(
             text(
-                "SELECT m.id, m.code, m.model FROM machines m JOIN sites s ON s.id = m.site_id "
+                "SELECT m.id, m.code FROM machines m JOIN sites s ON s.id = m.site_id "
                 "JOIN organizations o ON o.id = s.org_id WHERE o.code = 'demo' AND m.code LIKE 'sim0%'"
             )
         )
@@ -126,31 +111,12 @@ async def seed(session: AsyncSession, now: datetime) -> None:
     if not machines:
         return
     existing = await session.execute(
-        text("SELECT 1 FROM ballbar_tests WHERE machine_id = ANY(:ids) LIMIT 1"),
-        {"ids": [m["id"] for m in machines.values()]},
+        text("SELECT 1 FROM ballbar_tests WHERE machine_id = ANY(:ids) LIMIT 1"), {"ids": list(machines.values())}
     )
     if existing.first() is not None:
         return
 
-    models = {"sim01": MILL, "sim02": MILL, "sim04": MILL, "sim05": MILL, "sim03": LATHE, "sim06": LATHE}
-    for code, model in models.items():
-        if code in machines:
-            await session.execute(
-                text("UPDATE machines SET model = COALESCE(model, :model) WHERE id = :id"),
-                {"model": model, "id": machines[code]["id"]},
-            )
-    for model, limits in MODEL_TOLERANCES.items():
-        for parameter, limit in limits.items():
-            await session.execute(
-                text(
-                    "INSERT INTO ballbar_tolerances (machine_model, parameter, limit_value, unit) "
-                    "VALUES (:model, :parameter, :limit, :unit) ON CONFLICT DO NOTHING"
-                ),
-                {"model": model, "parameter": parameter, "limit": limit, "unit": geometry.BY_CODE[parameter].unit},
-            )
-
     async def add(code: str, days_ago: float, plane: str, radius: float, feed: float, arc: int, wear: float) -> int:
-        results = _results(plane, wear)
         data = geometry.TestIn(
             performed_at=now - timedelta(days=days_ago),
             engineer=ENGINEER,
@@ -160,31 +126,35 @@ async def seed(session: AsyncSession, now: datetime) -> None:
             arc_deg=arc,
             air_temp_c=20.4,
             machine_temp_c=21.8,
-            template=f"Демо {plane} R{radius:g} F{feed:g}",
+            template=f"Демо {plane} R{radius:g} F{feed:g} {arc}°",
             notes="Демонстрационные данные симулятора, не измерение.",
-            results=results,
+            results=_results(plane, wear),
         )
-        return await geometry.create_test(session, machines[code]["id"], data, None)
+        return await geometry.create_test(session, machines[code], data, None)
 
-    if "sim01" in machines:  # a squareness that slowly drifts out of tolerance
+    async def repair(code: str, days_ago: float, description: str) -> None:
+        await geometry.add_repair(session, machines[code], now - timedelta(days=days_ago), description, ENGINEER, None)
+
+    async def collision(code: str, days_ago: float, comment: str) -> None:
+        await journal.add_collision(session, machines[code], now - timedelta(days=days_ago), comment, "оператор")
+
+    if "sim01" in machines:  # a squareness that drifts, a collision, then a repair between the tests
         for days, wear in ((330, 0.0), (240, 0.25), (150, 0.55), (45, 1.0)):
             last = await add("sim01", days, "XY", 100, 1000, 360, wear)
         await add("sim01", 46, "ZX", 100, 500, 220, 0.3)
+        await collision("sim01", 200, "Демо: удар фрезы о прихват")
+        await repair("sim01", 100, "Демо: замена ШВП оси X, регулировка люфта")
         results = _results("XY", 1.0)
         for number, direction in enumerate(("CW", "CCW")):
             angles, deviations = synthetic_trace(100, results, direction, 360, seed=number)
             await geometry.put_trace(session, last, direction, angles, deviations, None, source="demo")
         await geometry.add_file(session, last, "demo-ballbar-XY.pdf", demo_pdf("Demo ballbar report XY"), None, "demo")
-        await geometry.set_policy(session, machines["sim01"]["id"], Policy(interval_days=180, interval_run_hours=4000))
-    if "sim02" in machines:  # within tolerance, but a collision was reported after the test
+    if "sim02" in machines:
         await add("sim02", 100, "XY", 100, 1000, 360, 0.2)
-        await journal.add_collision(
-            session, machines["sim02"]["id"], now - timedelta(days=2), "Демо: удар оправки о деталь", "оператор"
-        )
-    if "sim03" in machines:  # the simulated servo alarms after this test make the next check due
+        await collision("sim02", 2, "Демо: удар оправки о деталь")
+    if "sim03" in machines:
         await add("sim03", 60, "ZX", 100, 500, 220, 0.3)
-        await geometry.set_policy(session, machines["sim03"]["id"], Policy(interval_days=120))
     if "sim04" in machines:
-        await add("sim04", 400, "XY", 150, 2000, 360, 0.4)  # overdue by date
+        await add("sim04", 400, "XY", 150, 2000, 360, 0.4)
     if "sim06" in machines:
-        await add("sim06", 170, "ZX", 100, 500, 220, 0.2)  # due within two weeks
+        await add("sim06", 170, "ZX", 100, 500, 220, 0.2)

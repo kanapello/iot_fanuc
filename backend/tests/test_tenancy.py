@@ -141,8 +141,7 @@ async def world(session_factory: Factory) -> World:
         ]:
             world.ids[f"{name}_a"] = await first(f"SELECT min(id) FROM {table} WHERE org_id = :o", o=org)
 
-        # geometric accuracy of organization A: a ballbar test with a file and points, tolerances, a collision
-        await session.execute(text("UPDATE machines SET model = 'Shared VF-500' WHERE id = :m"), {"m": a1.machine_id})
+        # geometry archive of organization A's machine: a ballbar test with a file and points, a collision, a repair
         test_in = geometry.TestIn(
             T0, "acme engineer", "XY", 100, 1000, 360, results=[geometry.ResultIn("squareness", 12.0)]
         )
@@ -152,13 +151,8 @@ async def world(session_factory: Factory) -> World:
         )
         world.ids["ballbar_file_a"] = stored["id"]
         await geometry.put_trace(session, world.ids["ballbar_a"], "CW", [0.0, 120.0, 240.0], [1.0, -1.0, 0.5], None)
-        world.ids["tolerance_a"] = await geometry.save_tolerance(
-            session, None, a1.machine_id, None, "squareness", None, None, 10.0
-        )
-        world.ids["tolerance_model"] = await geometry.save_tolerance(
-            session, None, None, "Shared VF-500", "squareness", None, None, 15.0
-        )
         await journal.add_collision(session, a1.machine_id, T0 + timedelta(minutes=5), "acme collision", None)
+        await geometry.add_repair(session, a1.machine_id, T0 + timedelta(minutes=10), "acme repair", "acme", None)
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
@@ -189,6 +183,7 @@ class Call:
     json: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
     files: dict[str, Any] | None = None
+    archive: bool = False  # a route of the geometry archive: it exists only for the service
 
 
 def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
@@ -231,9 +226,12 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         "arc_deg": 360,
     }
     trace = {"direction": "CCW", "angle_deg": [0, 1, 2], "deviation_um": [0, 0, 0]}
-    setup = {"parameter": "squareness", "plane": "XY", "radius_mm": 100, "feed_mm_min": 1000}
-    machine_tolerance = {"machine_id": m, "parameter": "squareness", "limit_value": 99}
-    model_tolerance = {"machine_model": "Shared VF-500", "parameter": "squareness", "limit_value": 99}
+    trend = {"group": "setup:XY|100|1000|360", "parameter": "squareness"}
+    repair = {"completed_at": FROM, "description": "xyz"}
+
+    def archive(path: str, **kwargs: Any) -> Call:
+        return Call(path, "hidden", archive=True, **kwargs)
+
     return {
         ("GET", "/auth/me"): [Call("/auth/me", "clean")],
         ("GET", "/machines"): [Call("/machines", "clean"), Call("/machines", "empty", params={"site_id": a.site_id})],
@@ -295,43 +293,26 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         ],
         ("DELETE", "/device-tokens/{token_id}"): [Call(f"/device-tokens/{w.ids['token_kiosk_a']}", "hidden")],
         # geometric accuracy
-        ("GET", "/geometry/catalog"): [Call("/geometry/catalog", "clean")],
-        ("GET", "/machines/{machine_id}/ballbar/tests"): [Call(f"/machines/{m}/ballbar/tests", "hidden")],
-        ("POST", "/machines/{machine_id}/ballbar/tests"): [
-            Call(f"/machines/{m}/ballbar/tests", "hidden", json=ballbar)
-        ],
-        ("GET", "/ballbar/tests/{test_id}"): [Call(f"/ballbar/tests/{test}", "hidden")],
-        ("PUT", "/ballbar/tests/{test_id}"): [Call(f"/ballbar/tests/{test}", "hidden", json=ballbar)],
-        ("POST", "/ballbar/tests/{test_id}/void"): [
-            Call(f"/ballbar/tests/{test}/void", "hidden", json={"reason": "xyz"})
-        ],
+        # geometry archive of the service
+        ("GET", "/geometry/catalog"): [archive("/geometry/catalog")],
+        ("GET", "/geometry/machines"): [archive("/geometry/machines")],
+        ("GET", "/machines/{machine_id}/ballbar/tests"): [archive(f"/machines/{m}/ballbar/tests")],
+        ("POST", "/machines/{machine_id}/ballbar/tests"): [archive(f"/machines/{m}/ballbar/tests", json=ballbar)],
+        ("GET", "/ballbar/tests/{test_id}"): [archive(f"/ballbar/tests/{test}")],
+        ("PUT", "/ballbar/tests/{test_id}"): [archive(f"/ballbar/tests/{test}", json=ballbar)],
+        ("POST", "/ballbar/tests/{test_id}/void"): [archive(f"/ballbar/tests/{test}/void", json={"reason": "xyz"})],
         ("POST", "/ballbar/tests/{test_id}/files"): [
-            Call(f"/ballbar/tests/{test}/files", "hidden", files={"file": ("x.pdf", b"%PDF-1.4 x")})
+            archive(f"/ballbar/tests/{test}/files", files={"file": ("x.pdf", b"%PDF-1.4 x")})
         ],
-        ("GET", "/ballbar/files/{file_id}"): [Call(f"/ballbar/files/{w.ids['ballbar_file_a']}", "hidden")],
-        ("PUT", "/ballbar/tests/{test_id}/traces"): [Call(f"/ballbar/tests/{test}/traces", "hidden", json=trace)],
-        ("GET", "/ballbar/tests/{test_id}/traces"): [Call(f"/ballbar/tests/{test}/traces", "hidden")],
-        ("GET", "/machines/{machine_id}/ballbar/status"): [Call(f"/machines/{m}/ballbar/status", "hidden")],
-        ("GET", "/machines/{machine_id}/ballbar/trend"): [Call(f"/machines/{m}/ballbar/trend", "hidden", params=setup)],
-        ("PUT", "/machines/{machine_id}/ballbar/policy"): [
-            Call(f"/machines/{m}/ballbar/policy", "hidden", json={"interval_days": 1})
-        ],
+        ("GET", "/ballbar/files/{file_id}"): [archive(f"/ballbar/files/{w.ids['ballbar_file_a']}")],
+        ("PUT", "/ballbar/tests/{test_id}/traces"): [archive(f"/ballbar/tests/{test}/traces", json=trace)],
+        ("GET", "/ballbar/tests/{test_id}/traces"): [archive(f"/ballbar/tests/{test}/traces")],
+        ("GET", "/machines/{machine_id}/ballbar/groups"): [archive(f"/machines/{m}/ballbar/groups")],
+        ("GET", "/machines/{machine_id}/ballbar/trend"): [archive(f"/machines/{m}/ballbar/trend", params=trend)],
         ("POST", "/machines/{machine_id}/collisions"): [Call(f"/machines/{m}/collisions", "hidden", json={})],
-        ("GET", "/machines/{machine_id}/collisions"): [Call(f"/machines/{m}/collisions", "hidden")],
-        ("GET", "/geometry/tolerances"): [Call("/geometry/tolerances", "clean")],
-        ("POST", "/geometry/tolerances"): [
-            Call("/geometry/tolerances", "hidden", json={"machine_id": m, "parameter": "backlash", "limit_value": 1}),
-            Call("/geometry/tolerances", "hidden", json={**model_tolerance, "parameter": "backlash"}),
-        ],
-        ("PUT", "/geometry/tolerances/{tolerance_id}"): [
-            Call(f"/geometry/tolerances/{w.ids['tolerance_a']}", "hidden", json=machine_tolerance),
-            Call(f"/geometry/tolerances/{w.ids['tolerance_model']}", "hidden", json=model_tolerance),
-        ],
-        ("DELETE", "/geometry/tolerances/{tolerance_id}"): [
-            Call(f"/geometry/tolerances/{w.ids['tolerance_a']}", "hidden"),
-            Call(f"/geometry/tolerances/{w.ids['tolerance_model']}", "hidden"),
-        ],
-        ("GET", "/service/worklist"): [Call("/service/worklist", "clean")],
+        ("GET", "/machines/{machine_id}/collisions"): [archive(f"/machines/{m}/collisions")],
+        ("GET", "/machines/{machine_id}/repairs"): [archive(f"/machines/{m}/repairs")],
+        ("POST", "/machines/{machine_id}/repairs"): [archive(f"/machines/{m}/repairs", json=repair)],
     }
 
 
@@ -352,7 +333,7 @@ async def _fingerprint(factory: Factory) -> dict[str, Any]:
         "organizations", "sites", "areas", "collectors", "machines", "shift_templates", "downtime_reasons",
         "scrap_reasons", "programs", "state_rules", "users", "memberships", "device_tokens", "downtime_annotations",
         "scrap_records", "operator_setup_marks", "timeline_dirty", "oee_dirty", "ballbar_tests", "ballbar_results",
-        "ballbar_traces", "ballbar_files", "ballbar_tolerances", "ballbar_policies", "collision_marks",
+        "ballbar_traces", "ballbar_files", "collision_marks", "repair_records",
     ]  # fmt: skip
     async with factory() as session:
         result = {}
@@ -391,15 +372,37 @@ async def test_another_organization_sees_nothing_on_any_route(world: World, sess
                         assert _is_empty(response.json()), where
     assert await _fingerprint(session_factory) == before, "requests aimed at another organization changed data"
 
-    # the same reading requests by the administrator of organization A do return its data
-    async with client(world.tokens["admin_a"]) as http:
-        for (method, _template), requests in calls.items():
-            if method != "GET":
-                continue
-            for call in requests:
-                response = await http.request(method, call.path, params=call.params)
-                assert response.status_code == 200, f"{call.path}: {response.text[:200]}"
-                assert MARKER in response.text or not _is_empty(response.json()), f"{call.path} {call.params}"
+    # the same reading requests return the data of organization A to those who may see it:
+    # its administrator, and for the geometry archive the service
+    for owner in ("admin_a", "service"):
+        async with client(world.tokens[owner]) as http:
+            for (method, _template), requests in calls.items():
+                for call in requests:
+                    if method != "GET" or call.archive != (owner == "service"):
+                        continue
+                    response = await http.request(method, call.path, params=call.params)
+                    assert response.status_code == 200, f"{owner} {call.path}: {response.text[:200]}"
+                    assert MARKER in response.text or not _is_empty(response.json()), f"{call.path} {call.params}"
+
+
+async def test_customers_do_not_see_the_geometry_archive_of_their_own_machines(
+    world: World, session_factory: Factory
+) -> None:
+    """Tests, files, points, trends, collision marks and repairs exist only for the service: everyone of the
+    customer gets 404 on every archive route for the machines of their own organization."""
+    calls = [
+        (method, call) for (method, _t), requests in foreign_calls(world).items() for call in requests if call.archive
+    ]
+    assert len(calls) == 16  # every geometry route except marking a collision
+    before = await _fingerprint(session_factory)
+    for who in ("admin_a", "engineer_a1", "master_a1", "operator_a1", "kiosk_a", "display_a"):
+        async with client(world.tokens[who]) as http:
+            assert (await http.get("/auth/me")).json()["menu"]["service"] is False, who
+            for method, call in calls:
+                response = await http.request(method, call.path, json=call.json, params=call.params, files=call.files)
+                assert response.status_code == 404, f"{who} {method} {call.path} -> {response.status_code}"
+                assert MARKER not in response.text, f"{who} {method} {call.path}"
+    assert await _fingerprint(session_factory) == before
 
 
 async def test_unauthenticated_requests_are_rejected(world: World) -> None:

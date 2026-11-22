@@ -1,14 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type BallbarResult, type Catalog, type CatalogParameter, type Me } from "../../api/client";
+import { api, type Catalog, type CatalogParameter, type Me } from "../../api/client";
 import { t } from "../../shared/i18n";
 
-export function useCatalog() {
-  return useQuery({ queryKey: ["geometry-catalog"], queryFn: () => api<Catalog>("/geometry/catalog"), staleTime: Infinity });
+/** Catalog of ballbar parameters; it exists only for the service, so it is requested only for them. */
+export function useCatalog(enabled = true) {
+  return useQuery({
+    queryKey: ["geometry-catalog"],
+    queryFn: () => api<Catalog>("/geometry/catalog"),
+    staleTime: Infinity,
+    enabled,
+  });
 }
 
-/** Whether the user enters ballbar tests (the server checks it per machine). */
-export const canEditGeometry = (me: Me | undefined) =>
-  Boolean(me && (me.superadmin || me.roles.some((r) => ["engineer", "admin", "service"].includes(r))));
+/** The geometry archive exists only for the service (and the superadmin). */
+export const canUseArchive = (me: Me | undefined) => Boolean(me?.menu.service);
 
 export const directionLabel = (direction: string | null) => t.geometry.directions[direction ?? ""] ?? direction ?? "";
 
@@ -34,18 +39,5 @@ export const formatNumber = (value: number | null | undefined, digits = 1) =>
 
 export const formatDate = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString("ru-RU") : "—");
 
-export const exceededText = (r: BallbarResult) =>
-  `${resultLabel(r.parameter, r.axis, r.direction)}: ${formatNumber(r.value, 2)} ${r.unit} > ${formatNumber(r.limit, 2)}`;
-
-/** At most ``limit`` triggers, the rest as a count: a recurring alarm must not flood the screen. */
-export function shortTriggers<T>(triggers: T[], limit = 3): { shown: T[]; more: number } {
-  return { shown: triggers.slice(0, limit), more: Math.max(0, triggers.length - limit) };
-}
-
-export const STATUS_COLORS: Record<string, string> = {
-  never: "#64748b",
-  ok: "#22c55e",
-  soon: "#eab308",
-  overdue: "#ef4444",
-  event: "#a855f7",
-};
+/** Whole days since a moment; the same rule as the server's archive index. */
+export const daysSince = (iso: string) => Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 86_400_000));

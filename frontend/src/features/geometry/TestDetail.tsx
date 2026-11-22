@@ -22,7 +22,7 @@ export function TestDetail({
   if (!test) return <p className="text-slate-400">{t.common.loading}</p>;
   const files = (Array.isArray(test.files) ? test.files : []) as BallbarFile[];
   const writable = editable && !test.voided_at;
-  const refresh = () => client.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("ballbar") || q.queryKey[0] === "geometry-status" });
+  const refresh = () => client.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("ballbar") });
 
   const onUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -85,7 +85,6 @@ export function TestDetail({
               <th className="px-2 py-1">{t.geometry.parameter}</th>
               <th className="px-2 py-1 text-right">{t.geometry.value}</th>
               <th className="px-2 py-1">{t.geometry.unit}</th>
-              <th className="px-2 py-1 text-right">{t.geometry.limit}</th>
             </tr>
           </thead>
           <tbody>
@@ -94,18 +93,15 @@ export function TestDetail({
               if (!rows.length) return null;
               return [
                 <tr key={group}>
-                  <td colSpan={4} className="px-2 pt-3 font-semibold text-slate-300">
+                  <td colSpan={3} className="px-2 pt-3 font-semibold text-slate-300">
                     {t.geometry.groups[group]}
                   </td>
                 </tr>,
                 ...rows.map((r) => (
-                  <tr key={`${r.parameter}${r.axis}${r.direction}`} className={`tabular border-t border-slate-800 ${r.exceeded ? "bg-red-900/50 text-red-100" : ""}`}>
+                  <tr key={`${r.parameter}${r.axis}${r.direction}`} className="tabular border-t border-slate-800">
                     <td className="px-2 py-1">{resultLabel(r.parameter, r.axis, r.direction, catalog)}</td>
                     <td className="px-2 py-1 text-right font-semibold">{formatNumber(r.value, 2)}</td>
                     <td className="px-2 py-1 text-slate-400">{r.unit}</td>
-                    <td className="px-2 py-1 text-right text-slate-300">
-                      {r.limit !== null && r.limit !== undefined ? `± ${formatNumber(r.limit, 2)} (${t.geometry.source[r.limit_source ?? ""]})` : "—"}
-                    </td>
                   </tr>
                 )),
               ];

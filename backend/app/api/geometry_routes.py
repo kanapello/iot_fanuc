@@ -1,4 +1,9 @@
-"""Geometric accuracy API: ballbar tests in the machine card, tolerances, next check, service worklist."""
+"""Geometric accuracy API: the internal archive of the service (ADR 0005).
+
+Only the service (and the superadmin) hold geometry rights. For everybody else every route here
+answers 404, even for their own machines: the archive does not exist for customers. The one
+exception is marking a collision, which operators and masters do from the shop floor.
+"""
 
 from __future__ import annotations
 
@@ -8,15 +13,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError
 
 from app.admin import journal
 from app.admin import service as admin
-from app.api.deps import FORBIDDEN, NOT_FOUND, CurrentScope, Session, SettingsDep, as_utc, require, require_machine
-from app.core.access import GEOMETRY_EDIT, GEOMETRY_VIEW, MACHINE_VIEW, OPERATOR_INPUT, Scope
+from app.api.deps import FORBIDDEN, NOT_FOUND, CurrentScope, Session, SettingsDep, as_utc, require_machine
+from app.core.access import GEOMETRY_EDIT, GEOMETRY_VIEW, OPERATOR_INPUT, Scope
 from app.geometry import service as geometry
 from app.geometry.catalog import ARCS, CATALOG, DIRECTIONS, PLANE_AXES, PLANES
-from app.geometry.schedule import Policy
 
 router = APIRouter(prefix="/api/v1", tags=["geometry"])
 Axis = Literal["X", "Y", "Z"]
@@ -28,30 +31,36 @@ def _bad_input(exc: Exception) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
 
 
-async def _machine(scope: Scope, session: Session, machine_id: int, permission: str) -> dict[str, Any]:
-    require_machine(scope, machine_id, permission)
-    (machine,) = await admin.list_machines(session, [machine_id], active_only=False)
-    return machine
+def _require_archive(scope: Scope) -> None:
+    """The archive exists only for the service."""
+    if not scope.has(GEOMETRY_VIEW):
+        raise NOT_FOUND
 
 
-async def _test_machine(scope: Scope, session: Session, test_id: int, permission: str) -> dict[str, Any]:
+def _require_geometry(scope: Scope, machine_id: int, permission: str = GEOMETRY_VIEW) -> None:
+    """A machine without geometry rights has no archive for the caller: 404, not 403."""
+    if not scope.can_machine(permission, machine_id):
+        raise NOT_FOUND
+
+
+async def _test_machine(scope: Scope, session: Session, test_id: int, permission: str) -> int:
     machine_id = await geometry.test_owner(session, test_id)
     if machine_id is None:
         raise NOT_FOUND
-    return await _machine(scope, session, machine_id, permission)
+    _require_geometry(scope, machine_id, permission)
+    return machine_id
 
 
-async def _writable_test(scope: Scope, session: Session, test_id: int) -> dict[str, Any]:
-    machine = await _test_machine(scope, session, test_id, GEOMETRY_EDIT)
-    test = await geometry.get_test(session, machine, test_id)
-    if test["voided_at"] is not None:
+async def _writable_test(scope: Scope, session: Session, test_id: int) -> None:
+    await _test_machine(scope, session, test_id, GEOMETRY_EDIT)
+    if (await geometry.get_test(session, test_id))["voided_at"] is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "the test is voided")
-    return machine
 
 
 @router.get("/geometry/catalog")
-async def catalog(_: CurrentScope) -> dict[str, Any]:
+async def catalog(scope: CurrentScope) -> dict[str, Any]:
     """Planes, arcs and the parameters of a ballbar test with their units."""
+    _require_archive(scope)
     return {
         "planes": list(PLANES),
         "plane_axes": {plane: list(axes) for plane, axes in PLANE_AXES.items()},
@@ -69,6 +78,25 @@ async def catalog(_: CurrentScope) -> dict[str, Any]:
             for p in CATALOG
         ],
     }
+
+
+@router.get("/geometry/machines")
+async def archive_index(scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
+    """Machines of the archive: when each was last tested and how many days ago."""
+    _require_archive(scope)
+    machines = await admin.list_machines(session, scope.machine_ids(GEOMETRY_VIEW))
+    tested = await geometry.overview(session, [m["id"] for m in machines], datetime.now(UTC))
+    return [
+        {
+            "machine_id": m["id"],
+            "machine_name": m["name"],
+            "org_name": m["org_name"],
+            "site_name": m["site_name"],
+            "area_name": m["area_name"],
+            **tested[m["id"]],
+        }
+        for m in machines
+    ]
 
 
 # ---------------------------------------------------------------- tests
@@ -115,13 +143,13 @@ class TestBody(BaseModel):
 
 @router.get("/machines/{machine_id}/ballbar/tests")
 async def list_tests(machine_id: int, scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
-    machine = await _machine(scope, session, machine_id, GEOMETRY_VIEW)
-    return await geometry.list_tests(session, machine)
+    _require_geometry(scope, machine_id)
+    return await geometry.list_tests(session, machine_id)
 
 
 @router.post("/machines/{machine_id}/ballbar/tests", status_code=status.HTTP_201_CREATED)
 async def create_test(machine_id: int, body: TestBody, scope: CurrentScope, session: Session) -> dict[str, int]:
-    await _machine(scope, session, machine_id, GEOMETRY_EDIT)
+    _require_geometry(scope, machine_id, GEOMETRY_EDIT)
     try:
         return {"id": await geometry.create_test(session, machine_id, body.to_input(), scope.user_id)}
     except geometry.GeometryInputError as exc:
@@ -130,8 +158,8 @@ async def create_test(machine_id: int, body: TestBody, scope: CurrentScope, sess
 
 @router.get("/ballbar/tests/{test_id}")
 async def get_test(test_id: int, scope: CurrentScope, session: Session) -> dict[str, Any]:
-    machine = await _test_machine(scope, session, test_id, GEOMETRY_VIEW)
-    return await geometry.get_test(session, machine, test_id)
+    await _test_machine(scope, session, test_id, GEOMETRY_VIEW)
+    return await geometry.get_test(session, test_id)
 
 
 @router.put("/ballbar/tests/{test_id}")
@@ -178,10 +206,10 @@ async def upload_file(
 
 @router.get("/ballbar/files/{file_id}")
 async def download_file(file_id: int, scope: CurrentScope, session: Session) -> Response:
-    owner = await geometry.file_owner(session, file_id)
-    if owner is None:
+    machine_id = await geometry.file_owner(session, file_id)
+    if machine_id is None:
         raise NOT_FOUND
-    await _machine(scope, session, owner[1], GEOMETRY_VIEW)
+    _require_geometry(scope, machine_id)
     stored = await geometry.read_file(session, file_id)
     disposition = f"attachment; filename*=UTF-8''{quote(stored['filename'])}"
     return Response(stored["content"], media_type=stored["content_type"], headers={"Content-Disposition": disposition})
@@ -196,7 +224,7 @@ class TraceBody(BaseModel):
 
 @router.put("/ballbar/tests/{test_id}/traces")
 async def put_trace(test_id: int, body: TraceBody, scope: CurrentScope, session: Session) -> dict[str, int]:
-    """Raw points of one run (angle, radial deviation from nominal). The future .b5r parser writes here too."""
+    """Raw points of one run (angle, radial deviation from nominal) for the polar plot."""
     await _writable_test(scope, session, test_id)
     try:
         points = await geometry.put_trace(
@@ -215,15 +243,14 @@ async def get_traces(
     return await geometry.get_traces(session, test_id, max_points)
 
 
-# ---------------------------------------------------------------- machine card: status, trend, policy, collisions
+# ---------------------------------------------------------------- trend
 
 
-@router.get("/machines/{machine_id}/ballbar/status")
-async def machine_status(machine_id: int, scope: CurrentScope, session: Session) -> dict[str, Any]:
-    """Next check (by date, running hours, events) and the latest test of every plane."""
-    machine = await _machine(scope, session, machine_id, GEOMETRY_VIEW)
-    state = (await geometry.machine_states(session, [machine], datetime.now(UTC)))[machine_id]
-    return {**state, "configurations": await geometry.configurations(session, machine_id)}
+@router.get("/machines/{machine_id}/ballbar/groups")
+async def trend_groups(machine_id: int, scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
+    """Groups of comparable tests: the same template, or without a template the same plane, radius, feed and arc."""
+    _require_geometry(scope, machine_id)
+    return await geometry.groups(session, machine_id)
 
 
 @router.get("/machines/{machine_id}/ballbar/trend")
@@ -231,40 +258,20 @@ async def trend(
     machine_id: int,
     scope: CurrentScope,
     session: Session,
+    group: Annotated[str, Query(max_length=300)],
     parameter: str,
-    plane: PlaneName,
-    radius_mm: float,
-    feed_mm_min: float,
     axis: Axis | None = None,
     direction: Direction | None = None,
 ) -> dict[str, Any]:
-    """One parameter over time, only from tests with the same plane, radius and feed."""
-    machine = await _machine(scope, session, machine_id, GEOMETRY_VIEW)
+    """One parameter over the tests of a group, with collision marks and repairs as events."""
+    _require_geometry(scope, machine_id)
     try:
-        return await geometry.trend(session, machine, parameter, plane, radius_mm, feed_mm_min, axis, direction)
+        return await geometry.trend(session, machine_id, group, parameter, axis, direction)
     except ValueError as exc:
         raise _bad_input(exc) from exc
 
 
-class PolicyBody(BaseModel):
-    interval_days: int | None = Field(default=None, gt=0, le=3650)
-    interval_run_hours: float | None = Field(default=None, gt=0, le=100_000)
-    on_alarm: bool = True
-    on_collision: bool = True
-    alarm_patterns: list[str] = Field(default_factory=lambda: list(Policy().alarm_patterns), max_length=50)
-
-
-@router.put("/machines/{machine_id}/ballbar/policy")
-async def set_policy(machine_id: int, body: PolicyBody, scope: CurrentScope, session: Session) -> dict[str, int]:
-    await _machine(scope, session, machine_id, GEOMETRY_EDIT)
-    policy = Policy(
-        body.interval_days, body.interval_run_hours, body.on_alarm, body.on_collision, tuple(body.alarm_patterns)
-    )
-    try:
-        await geometry.set_policy(session, machine_id, policy)
-    except geometry.GeometryInputError as exc:
-        raise _bad_input(exc) from exc
-    return {"machine_id": machine_id}
+# ---------------------------------------------------------------- events: collisions and repairs
 
 
 class CollisionBody(BaseModel):
@@ -275,7 +282,10 @@ class CollisionBody(BaseModel):
 
 @router.post("/machines/{machine_id}/collisions", status_code=status.HTTP_201_CREATED)
 async def mark_collision(machine_id: int, body: CollisionBody, scope: CurrentScope, session: Session) -> dict[str, int]:
-    """Mark "collision" (operator, or the engineer / service after a crash): the next geometric check is due at once."""
+    """Mark "collision": an event entered on the shop floor (operator, master) or by the service.
+
+    Customers enter it but do not see it afterwards: the marks are shown only in the service archive.
+    """
     require_machine(scope, machine_id)
     if not (scope.can_machine(OPERATOR_INPUT, machine_id) or scope.can_machine(GEOMETRY_EDIT, machine_id)):
         raise FORBIDDEN
@@ -290,109 +300,32 @@ async def mark_collision(machine_id: int, body: CollisionBody, scope: CurrentSco
 async def list_collisions(
     machine_id: int, scope: CurrentScope, session: Session, days: Annotated[int, Query(ge=1, le=3650)] = 365
 ) -> list[dict[str, Any]]:
-    await _machine(scope, session, machine_id, GEOMETRY_VIEW)
+    _require_geometry(scope, machine_id)
     since = datetime.now(UTC) - timedelta(days=days)
     marks = (await journal.list_collisions(session, {machine_id: since}))[machine_id]
     return [{"id": i, "ts": ts, "comment": comment, "operator": op} for ts, comment, i, op in reversed(marks)]
 
 
-# ---------------------------------------------------------------- tolerances
+class RepairBody(BaseModel):
+    completed_at: datetime
+    description: str = Field(min_length=3, max_length=2000)
+    engineer: str = Field(default="", max_length=200)
 
 
-class ToleranceBody(BaseModel):
-    machine_id: int | None = None
-    machine_model: str | None = Field(default=None, max_length=100)
-    parameter: str
-    plane: PlaneName | None = None
-    axis: Axis | None = None
-    limit_value: float = Field(gt=0)
+@router.get("/machines/{machine_id}/repairs")
+async def list_repairs(machine_id: int, scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
+    _require_geometry(scope, machine_id)
+    return await geometry.list_repairs(session, machine_id)
 
 
-def _tolerance_access(scope: Scope, row: dict[str, Any], for_edit: bool) -> None:
-    """Machine rows belong to the machine's organization; model rows are shared and edited by the service."""
-    if row.get("machine_id") is not None:
-        require_machine(scope, row["machine_id"], GEOMETRY_EDIT if for_edit else GEOMETRY_VIEW)
-    elif (for_edit and not scope.global_authority(GEOMETRY_EDIT)) or not scope.has(GEOMETRY_VIEW):
-        raise FORBIDDEN
-
-
-@router.get("/geometry/tolerances")
-async def list_tolerances(scope: CurrentScope, session: Session, model: str | None = None) -> dict[str, Any]:
-    """Tolerances of machine models (shared) and of the machines in the caller's scope."""
-    require(scope, GEOMETRY_VIEW)
-    machine_ids = scope.machine_ids(GEOMETRY_VIEW)
-    rows = await geometry.tolerance_rows(session, machine_ids, model)
-    editable_ids = scope.machine_ids(GEOMETRY_EDIT)
-    models_editable = scope.global_authority(GEOMETRY_EDIT)
+@router.post("/machines/{machine_id}/repairs", status_code=status.HTTP_201_CREATED)
+async def add_repair(machine_id: int, body: RepairBody, scope: CurrentScope, session: Session) -> dict[str, int]:
+    """Record a completed repair; it appears as an event on the trend."""
+    _require_geometry(scope, machine_id, GEOMETRY_EDIT)
+    completed_at = as_utc(body.completed_at)
+    if completed_at > datetime.now(UTC) + timedelta(days=1):
+        raise _bad_input(ValueError("the repair date is in the future"))
+    engineer = body.engineer or scope.name
     return {
-        "models": await geometry.models_in_use(session, machine_ids),
-        "models_editable": models_editable,
-        "rows": [
-            {**r, "editable": r["machine_id"] in editable_ids if r["machine_id"] is not None else models_editable}
-            for r in rows
-        ],
+        "id": await geometry.add_repair(session, machine_id, completed_at, body.description, engineer, scope.user_id)
     }
-
-
-@router.post("/geometry/tolerances", status_code=status.HTTP_201_CREATED)
-async def create_tolerance(body: ToleranceBody, scope: CurrentScope, session: Session) -> dict[str, int]:
-    model = (body.machine_model or "").strip() or None
-    if (body.machine_id is None) == (model is None):
-        raise _bad_input(ValueError("exactly one of machine_id, machine_model is required"))
-    _tolerance_access(scope, {"machine_id": body.machine_id}, for_edit=True)
-    try:
-        async with session.begin_nested():
-            new_id = await geometry.save_tolerance(
-                session, None, body.machine_id, model, body.parameter, body.plane, body.axis, body.limit_value
-            )
-    except geometry.GeometryInputError as exc:
-        raise _bad_input(exc) from exc
-    except IntegrityError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, "such a tolerance already exists") from exc
-    return {"id": new_id}
-
-
-async def _tolerance(scope: Scope, session: Session, tolerance_id: int, for_edit: bool) -> dict[str, Any]:
-    row = await geometry.tolerance_row(session, tolerance_id)
-    if row is None:
-        raise NOT_FOUND
-    if row["machine_id"] is not None and not scope.can_machine(MACHINE_VIEW, row["machine_id"]):
-        raise NOT_FOUND
-    _tolerance_access(scope, row, for_edit)
-    return row
-
-
-@router.put("/geometry/tolerances/{tolerance_id}")
-async def update_tolerance(
-    tolerance_id: int, body: ToleranceBody, scope: CurrentScope, session: Session
-) -> dict[str, int]:
-    """Change parameter, plane, axis or limit; the owner of a row (machine or model) does not change."""
-    row = await _tolerance(scope, session, tolerance_id, for_edit=True)
-    try:
-        async with session.begin_nested():
-            await geometry.save_tolerance(
-                session, tolerance_id, row["machine_id"], row["machine_model"], body.parameter, body.plane, body.axis,
-                body.limit_value,
-            )  # fmt: skip
-    except geometry.GeometryInputError as exc:
-        raise _bad_input(exc) from exc
-    except IntegrityError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, "such a tolerance already exists") from exc
-    return {"id": tolerance_id}
-
-
-@router.delete("/geometry/tolerances/{tolerance_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_tolerance(tolerance_id: int, scope: CurrentScope, session: Session) -> None:
-    await _tolerance(scope, session, tolerance_id, for_edit=True)
-    await geometry.delete_tolerance(session, tolerance_id)
-
-
-# ---------------------------------------------------------------- service screen
-
-
-@router.get("/service/worklist")
-async def worklist(scope: CurrentScope, session: Session) -> list[dict[str, Any]]:
-    """Exceeded tolerances and due geometric checks of every machine in the caller's scope."""
-    require(scope, GEOMETRY_VIEW)
-    machines = await admin.list_machines(session, scope.machine_ids(GEOMETRY_VIEW))
-    return await geometry.worklist(session, machines, datetime.now(UTC))

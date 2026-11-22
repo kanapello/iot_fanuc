@@ -58,24 +58,3 @@ async def find_seq_gaps(
         {**m, "after_ts": m["after_ts"].isoformat(), "before_ts": m["before_ts"].isoformat()}
         for m in (dict(r._mapping) for r in rows)
     ]
-
-
-async def alarms_since(
-    session: AsyncSession, since: dict[int, datetime]
-) -> dict[int, list[tuple[datetime, str | None, str | None, str | None]]]:
-    """Alarms raised on each machine after the given moment: (ts, code, category, message)."""
-    result: dict[int, list[tuple[datetime, str | None, str | None, str | None]]] = {m: [] for m in since}
-    if not since:
-        return result
-    rows = await session.execute(
-        text(
-            "SELECT e.machine_id, e.ts, e.code, e.payload->>'category' AS category, e.message "
-            "FROM machine_events e JOIN unnest(CAST(:machines AS bigint[]), CAST(:since AS timestamptz[])) "
-            "AS s(machine_id, since) ON s.machine_id = e.machine_id "
-            "WHERE e.type = 'alarm_raised' AND e.ts > s.since ORDER BY e.ts"
-        ),
-        {"machines": list(since), "since": list(since.values())},
-    )
-    for r in rows:
-        result[r.machine_id].append((r.ts, r.code, r.category, r.message))
-    return result

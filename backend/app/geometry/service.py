@@ -1,9 +1,10 @@
-"""Geometric accuracy (ballbar) data: tests, results, original files, raw points, tolerances,
-next-check policy, machine status and the service worklist.
+"""Internal archive of the service: ballbar tests, results, original files, raw circle points,
+parameter trends and the repair log.
 
-Functions that answer for several machines take the machines of the caller's access
-scope as an explicit argument; single-object functions are called only after the
-caller checked access to the machine the object belongs to.
+There is no analysis here: no tolerances, no statuses, no next-check calculation (ADR 0005).
+Functions that answer for several machines take the machines of the caller's access scope as an
+explicit argument; single-object functions are called only after the caller checked access to the
+machine the object belongs to.
 """
 
 from __future__ import annotations
@@ -13,24 +14,17 @@ import math
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from operator import itemgetter
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import journal
-from app.geometry.catalog import BY_CODE, DIRECTIONS, PLANE_AXES, PLANES, check_result
-
-__all__ = ["BY_CODE", "PLANE_AXES"]  # re-exported for the demo seed
-from app.geometry.schedule import DEFAULT_POLICY, Policy, next_check
-from app.geometry.tolerances import Tolerance, exceeds, pick
-from app.ingest.health import alarms_since
-from app.timeline.service import run_seconds_since
+from app.geometry.catalog import DIRECTIONS, PLANES, check_result
 
 _TEST_COLUMNS = (
     "t.id, t.machine_id, t.performed_at, t.engineer, t.plane, t.radius_mm, t.feed_mm_min, t.arc_deg, "
-    "t.air_temp_c, t.machine_temp_c, t.template, t.notes, t.results_source, t.voided_at, t.void_reason, "
+    "t.air_temp_c, t.machine_temp_c, t.template, t.notes, t.voided_at, t.void_reason, "
     "t.created_by, t.created_at, t.updated_at"
 )
 MAX_TRACE_POINTS = 200_000
@@ -61,6 +55,9 @@ class TestIn:
     template: str | None = None
     notes: str | None = None
     results: list[ResultIn] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------- tests and results
 
 
 def _result_rows(test_id: int, plane: str, results: Sequence[ResultIn]) -> list[dict[str, Any]]:
@@ -143,7 +140,7 @@ async def update_test(session: AsyncSession, test_id: int, data: TestIn) -> None
 
 
 async def void_test(session: AsyncSession, test_id: int, reason: str) -> None:
-    """A wrong test is not deleted (its originals stay): it is excluded from trends, status and worklist."""
+    """A wrong test is not deleted (its originals stay): it is left out of the trend."""
     await session.execute(
         text("UPDATE ballbar_tests SET voided_at = now(), void_reason = :reason, updated_at = now() WHERE id = :id"),
         {"id": test_id, "reason": reason.strip()},
@@ -156,150 +153,13 @@ async def test_owner(session: AsyncSession, test_id: int) -> int | None:
     return result.scalar_one_or_none()
 
 
-async def file_owner(session: AsyncSession, file_id: int) -> tuple[int, int] | None:
-    """(test id, machine id) of a stored file."""
-    row = (
-        await session.execute(
-            text(
-                "SELECT f.test_id, t.machine_id FROM ballbar_files f "
-                "JOIN ballbar_tests t ON t.id = f.test_id WHERE f.id = :id"
-            ),
-            {"id": file_id},
-        )
-    ).first()
-    return None if row is None else (row.test_id, row.machine_id)
-
-
-# ---------------------------------------------------------------- tolerances
-
-
-def _tolerance(row: Any) -> Tolerance:
-    return Tolerance(
-        id=row.id,
-        limit=row.limit_value,
-        unit=row.unit,
-        parameter=row.parameter,
-        machine_id=row.machine_id,
-        machine_model=row.machine_model,
-        plane=row.plane,
-        axis=row.axis,
+async def file_owner(session: AsyncSession, file_id: int) -> int | None:
+    """Machine of a stored file (for the access check)."""
+    result = await session.execute(
+        text("SELECT t.machine_id FROM ballbar_files f JOIN ballbar_tests t ON t.id = f.test_id WHERE f.id = :id"),
+        {"id": file_id},
     )
-
-
-async def load_tolerances(session: AsyncSession, machines: Collection[dict[str, Any]]) -> list[Tolerance]:
-    """Tolerances that may apply to the given machines (their own and those of their models)."""
-    ids = [m["id"] for m in machines]
-    models = sorted({m["model"] for m in machines if m.get("model")})
-    rows = await session.execute(
-        text("SELECT * FROM ballbar_tolerances WHERE machine_id = ANY(:ids) OR machine_model = ANY(:models)"),
-        {"ids": ids, "models": models},
-    )
-    return [_tolerance(r) for r in rows]
-
-
-def evaluate(
-    machine: dict[str, Any], plane: str, results: Sequence[dict[str, Any]], tolerances: Sequence[Tolerance]
-) -> list[dict[str, Any]]:
-    """Results with the tolerance in effect and whether they exceed it."""
-    evaluated = []
-    for r in results:
-        tol = pick(tolerances, machine["id"], machine.get("model"), plane, r["parameter"], r["axis"])
-        evaluated.append(
-            {
-                **r,
-                "limit": None if tol is None else tol.limit,
-                "limit_source": None if tol is None else tol.source,
-                "exceeded": exceeds(r["value"], tol),
-            }
-        )
-    return evaluated
-
-
-async def tolerance_rows(
-    session: AsyncSession, machine_ids: Collection[int], model: str | None = None
-) -> list[dict[str, Any]]:
-    """Machine rows of the given machines and every model row (models are shared by all organizations)."""
-    rows = await session.execute(
-        text(
-            "SELECT t.*, m.name AS machine_name FROM ballbar_tolerances t LEFT JOIN machines m ON m.id = t.machine_id "
-            "WHERE (t.machine_id = ANY(:ids) OR t.machine_model IS NOT NULL) "
-            "AND (CAST(:model AS text) IS NULL OR t.machine_model = :model) "
-            "ORDER BY t.machine_model NULLS FIRST, t.machine_id, t.parameter, t.plane NULLS FIRST, t.axis NULLS FIRST"
-        ),
-        {"ids": list(machine_ids), "model": model},
-    )
-    return [dict(r._mapping) for r in rows]
-
-
-async def tolerance_row(session: AsyncSession, tolerance_id: int) -> dict[str, Any] | None:
-    row = (await session.execute(text("SELECT * FROM ballbar_tolerances WHERE id = :id"), {"id": tolerance_id})).first()
-    return None if row is None else dict(row._mapping)
-
-
-def _check_tolerance(parameter: str, plane: str | None, axis: str | None) -> str:
-    entry = BY_CODE.get(parameter)
-    if entry is None:
-        raise GeometryInputError(f"unknown parameter {parameter!r}")
-    if plane is not None and plane not in PLANES:
-        raise GeometryInputError(f"unknown plane {plane!r}")
-    if axis is not None and (not entry.per_axis or (plane is not None and axis not in PLANE_AXES[plane])):
-        raise GeometryInputError(f"{parameter}: axis {axis!r} is not valid here")
-    return entry.unit
-
-
-async def save_tolerance(
-    session: AsyncSession,
-    tolerance_id: int | None,
-    machine_id: int | None,
-    machine_model: str | None,
-    parameter: str,
-    plane: str | None,
-    axis: str | None,
-    limit_value: float,
-) -> int:
-    unit = _check_tolerance(parameter, plane, axis)
-    if not (limit_value > 0 and math.isfinite(limit_value)):
-        raise GeometryInputError("limit must be a positive number")
-    params = {
-        "id": tolerance_id,
-        "machine": machine_id,
-        "model": machine_model,
-        "parameter": parameter,
-        "plane": plane,
-        "axis": axis,
-        "limit": limit_value,
-        "unit": unit,
-    }
-    if tolerance_id is None:
-        sql = (
-            "INSERT INTO ballbar_tolerances (machine_id, machine_model, parameter, plane, axis, limit_value, unit) "
-            "VALUES (:machine, :model, :parameter, :plane, :axis, :limit, :unit) RETURNING id"
-        )
-    else:
-        sql = (
-            "UPDATE ballbar_tolerances SET parameter = :parameter, plane = :plane, axis = :axis, "
-            "limit_value = :limit, unit = :unit, updated_at = now() WHERE id = :id RETURNING id"
-        )
-    return int((await session.execute(text(sql), params)).scalar_one())
-
-
-async def delete_tolerance(session: AsyncSession, tolerance_id: int) -> None:
-    await session.execute(text("DELETE FROM ballbar_tolerances WHERE id = :id"), {"id": tolerance_id})
-
-
-async def models_in_use(session: AsyncSession, machine_ids: Collection[int]) -> list[str]:
-    """Models of the given machines and models that already have tolerances."""
-    rows = await session.execute(
-        text(
-            "SELECT model FROM machines WHERE id = ANY(:ids) AND model IS NOT NULL "
-            "UNION SELECT machine_model FROM ballbar_tolerances WHERE machine_model IS NOT NULL ORDER BY 1"
-        ),
-        {"ids": list(machine_ids)},
-    )
-    return [r[0] for r in rows]
-
-
-# ---------------------------------------------------------------- tests and their data
+    return result.scalar_one_or_none()
 
 
 async def _results(session: AsyncSession, test_ids: Collection[int]) -> dict[int, list[dict[str, Any]]]:
@@ -320,34 +180,25 @@ async def _results(session: AsyncSession, test_ids: Collection[int]) -> dict[int
     return result
 
 
-async def list_tests(session: AsyncSession, machine: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = [
-        dict(r._mapping)
-        for r in await session.execute(
-            text(
-                f"SELECT {_TEST_COLUMNS}, (SELECT count(*) FROM ballbar_files f WHERE f.test_id = t.id) AS files, "
-                "EXISTS (SELECT 1 FROM ballbar_traces p WHERE p.test_id = t.id) AS has_traces "
-                "FROM ballbar_tests t WHERE t.machine_id = :m ORDER BY t.performed_at DESC, t.id DESC"
-            ),
-            {"m": machine["id"]},
-        )
-    ]
-    results = await _results(session, [r["id"] for r in rows])
-    tolerances = await load_tolerances(session, [machine])
-    for row in rows:
-        evaluated = evaluate(machine, row["plane"], results[row["id"]], tolerances)
-        row["results_count"] = len(evaluated)
-        row["exceeded"] = [r for r in evaluated if r["exceeded"]]
-    return rows
+async def list_tests(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        text(
+            f"SELECT {_TEST_COLUMNS}, (SELECT count(*) FROM ballbar_files f WHERE f.test_id = t.id) AS files, "
+            "(SELECT count(*) FROM ballbar_results r WHERE r.test_id = t.id) AS results_count, "
+            "EXISTS (SELECT 1 FROM ballbar_traces p WHERE p.test_id = t.id) AS has_traces "
+            "FROM ballbar_tests t WHERE t.machine_id = :m ORDER BY t.performed_at DESC, t.id DESC"
+        ),
+        {"m": machine_id},
+    )
+    return [dict(r._mapping) for r in rows]
 
 
-async def get_test(session: AsyncSession, machine: dict[str, Any], test_id: int) -> dict[str, Any]:
+async def get_test(session: AsyncSession, test_id: int) -> dict[str, Any]:
     row = (
         await session.execute(text(f"SELECT {_TEST_COLUMNS} FROM ballbar_tests t WHERE t.id = :id"), {"id": test_id})
     ).one()
     test = dict(row._mapping)
-    tolerances = await load_tolerances(session, [machine])
-    test["results"] = evaluate(machine, test["plane"], (await _results(session, [test_id]))[test_id], tolerances)
+    test["results"] = (await _results(session, [test_id]))[test_id]
     test["files"] = [
         dict(r._mapping)
         for r in await session.execute(
@@ -369,6 +220,9 @@ async def get_test(session: AsyncSession, machine: dict[str, Any], test_id: int)
         )
     ]
     return test
+
+
+# ---------------------------------------------------------------- original files and raw points
 
 
 def file_kind(filename: str, content: bytes) -> tuple[str, str]:
@@ -490,205 +344,134 @@ async def get_traces(session: AsyncSession, test_id: int, max_points: int) -> li
 # ---------------------------------------------------------------- trend
 
 
-async def configurations(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
-    """Test set-ups of a machine that can be compared with each other: same plane, radius and feed."""
+def group_key(template: str | None, plane: str, radius_mm: float, feed_mm_min: float, arc_deg: int) -> str:
+    """Which tests are comparable: the same template if one is set, otherwise the same set-up.
+
+    Templates are compared ignoring case and surrounding spaces.
+    """
+    name = (template or "").strip().lower()
+    if name:
+        return f"template:{name}"
+    return f"setup:{plane}|{radius_mm:g}|{feed_mm_min:g}|{arc_deg}"
+
+
+async def _valid_tests(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(
-            "SELECT plane, radius_mm, feed_mm_min, count(*) AS tests, max(performed_at) AS last FROM ballbar_tests "
-            "WHERE machine_id = :m AND voided_at IS NULL GROUP BY plane, radius_mm, feed_mm_min ORDER BY last DESC"
+            "SELECT id, performed_at, template, plane, radius_mm, feed_mm_min, arc_deg FROM ballbar_tests "
+            "WHERE machine_id = :m AND voided_at IS NULL ORDER BY performed_at, id"
         ),
         {"m": machine_id},
     )
-    return [dict(r._mapping) for r in rows]
+    tests = [dict(r._mapping) for r in rows]
+    for t in tests:
+        t["key"] = group_key(t["template"], t["plane"], t["radius_mm"], t["feed_mm_min"], t["arc_deg"])
+    return tests
+
+
+async def groups(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
+    """Groups of comparable tests, the most recently tested first; set-up fields from the latest test."""
+    by_key: dict[str, dict[str, Any]] = {}
+    for t in await _valid_tests(session, machine_id):  # oldest first: the latest test overwrites the set-up
+        group = by_key.setdefault(t["key"], {"key": t["key"], "tests": 0})
+        group.update(
+            {
+                "template": t["template"] if t["key"].startswith("template:") else None,
+                "plane": t["plane"],
+                "radius_mm": t["radius_mm"],
+                "feed_mm_min": t["feed_mm_min"],
+                "arc_deg": t["arc_deg"],
+                "last": t["performed_at"],
+                "tests": group["tests"] + 1,
+            }
+        )
+    return sorted(by_key.values(), key=lambda g: g["last"], reverse=True)
+
+
+async def events(session: AsyncSession, machine_id: int, since: datetime) -> list[dict[str, Any]]:
+    """Collision marks and completed repairs after ``since``: events shown on the trend."""
+    collisions = (await journal.list_collisions(session, {machine_id: since}))[machine_id]
+    found = [{"kind": "collision", "ts": ts, "text": comment} for ts, comment, _id, _operator in collisions]
+    found += [
+        {"kind": "repair", "ts": r["completed_at"], "text": r["description"]}
+        for r in await list_repairs(session, machine_id)
+        if r["completed_at"] > since
+    ]
+    return sorted(found, key=lambda e: e["ts"])
 
 
 async def trend(
-    session: AsyncSession,
-    machine: dict[str, Any],
-    parameter: str,
-    plane: str,
-    radius_mm: float,
-    feed_mm_min: float,
-    axis: str | None,
-    direction: str | None,
+    session: AsyncSession, machine_id: int, key: str, parameter: str, axis: str | None, direction: str | None
 ) -> dict[str, Any]:
-    """Values of one parameter over time, only from tests with the same plane, radius and feed."""
-    entry = check_result(plane, parameter, axis, direction)
-    rows = await session.execute(
-        text(
-            "SELECT t.id AS test_id, t.performed_at, r.value FROM ballbar_tests t "
-            "JOIN ballbar_results r ON r.test_id = t.id AND r.parameter = :p "
-            "AND r.axis IS NOT DISTINCT FROM CAST(:a AS text) AND r.direction IS NOT DISTINCT FROM CAST(:d AS text) "
-            "WHERE t.machine_id = :m AND t.voided_at IS NULL AND t.plane = :plane "
-            "AND t.radius_mm = :radius AND t.feed_mm_min = :feed ORDER BY t.performed_at, t.id"
-        ),
-        {
-            "m": machine["id"],
-            "p": parameter,
-            "a": axis,
-            "d": direction,
-            "plane": plane,
-            "radius": radius_mm,
-            "feed": feed_mm_min,
-        },
-    )
-    tol = pick(await load_tolerances(session, [machine]), machine["id"], machine.get("model"), plane, parameter, axis)
+    """Values of one parameter over the comparable tests of a group, with events in between."""
+    tests = [t for t in await _valid_tests(session, machine_id) if t["key"] == key]
+    if not tests:
+        raise GeometryInputError("no tests in this group")
+    entry = check_result(tests[-1]["plane"], parameter, axis, direction)
+    values = await _results(session, [t["id"] for t in tests])
     points = [
-        {"test_id": r.test_id, "performed_at": r.performed_at, "value": r.value, "exceeded": exceeds(r.value, tol)}
-        for r in rows
+        {"test_id": t["id"], "performed_at": t["performed_at"], "value": r["value"]}
+        for t in tests
+        for r in values[t["id"]]
+        if (r["parameter"], r["axis"], r["direction"]) == (parameter, axis, direction)
     ]
     return {
         "parameter": parameter,
         "unit": entry.unit,
-        "limit": None if tol is None else tol.limit,
-        "limit_source": None if tol is None else tol.source,
         "points": points,
+        "events": await events(session, machine_id, tests[0]["performed_at"]),
     }
 
 
-# ---------------------------------------------------------------- policy, status, worklist
+# ---------------------------------------------------------------- archive index and repair log
 
 
-def _policy(row: Any) -> Policy:
-    return Policy(
-        interval_days=row.interval_days,
-        interval_run_hours=row.interval_run_hours,
-        on_alarm=row.on_alarm,
-        on_collision=row.on_collision,
-        alarm_patterns=tuple(row.alarm_patterns),
-    )
-
-
-async def policies(session: AsyncSession, machine_ids: Collection[int]) -> dict[int, Policy]:
-    rows = await session.execute(
-        text("SELECT * FROM ballbar_policies WHERE machine_id = ANY(:ids)"), {"ids": list(machine_ids)}
-    )
-    found = {r.machine_id: _policy(r) for r in rows}
-    return {m: found.get(m, DEFAULT_POLICY) for m in machine_ids}
-
-
-async def set_policy(session: AsyncSession, machine_id: int, policy: Policy) -> None:
-    if (
-        policy.interval_days is None
-        and policy.interval_run_hours is None
-        and not policy.on_alarm
-        and not policy.on_collision
-    ):
-        raise GeometryInputError("at least one reason for the next check is required")
-    await session.execute(
-        text(
-            "INSERT INTO ballbar_policies (machine_id, interval_days, interval_run_hours, on_alarm, on_collision, "
-            "alarm_patterns) VALUES (:m, :days, :hours, :alarm, :collision, :patterns) ON CONFLICT (machine_id) "
-            "DO UPDATE SET interval_days = EXCLUDED.interval_days, interval_run_hours = EXCLUDED.interval_run_hours, "
-            "on_alarm = EXCLUDED.on_alarm, on_collision = EXCLUDED.on_collision, "
-            "alarm_patterns = EXCLUDED.alarm_patterns, updated_at = now()"
-        ),
-        {
-            "m": machine_id,
-            "days": policy.interval_days,
-            "hours": policy.interval_run_hours,
-            "alarm": policy.on_alarm,
-            "collision": policy.on_collision,
-            "patterns": [p.strip() for p in policy.alarm_patterns if p.strip()],
-        },
-    )
-
-
-async def _latest_tests(session: AsyncSession, machine_ids: Collection[int]) -> list[dict[str, Any]]:
-    """The latest valid test of every machine in every plane."""
+async def overview(session: AsyncSession, machine_ids: Collection[int], now: datetime) -> dict[int, dict[str, Any]]:
+    """Last valid test of each machine and how many days ago it was."""
     rows = await session.execute(
         text(
-            f"SELECT DISTINCT ON (t.machine_id, t.plane) {_TEST_COLUMNS} FROM ballbar_tests t "
-            "WHERE t.machine_id = ANY(:ids) AND t.voided_at IS NULL "
-            "ORDER BY t.machine_id, t.plane, t.performed_at DESC, t.id DESC"
+            "SELECT machine_id, max(performed_at) AS last_test_at, count(*) AS tests FROM ballbar_tests "
+            "WHERE machine_id = ANY(:ids) AND voided_at IS NULL GROUP BY machine_id"
         ),
         {"ids": list(machine_ids)},
     )
+    found = {r.machine_id: (r.last_test_at, int(r.tests)) for r in rows}
+    result = {}
+    for machine_id in machine_ids:
+        last, count = found.get(machine_id, (None, 0))
+        days = None if last is None else max(0, math.floor((now - last).total_seconds() / 86400))
+        result[machine_id] = {"last_test_at": last, "days_since": days, "tests": count}
+    return result
+
+
+async def add_repair(
+    session: AsyncSession, machine_id: int, completed_at: datetime, description: str, engineer: str, user_id: int | None
+) -> int:
+    return int(
+        (
+            await session.execute(
+                text(
+                    "INSERT INTO repair_records (machine_id, completed_at, description, engineer, created_by) "
+                    "VALUES (:m, :at, :description, :engineer, :user) RETURNING id"
+                ),
+                {
+                    "m": machine_id,
+                    "at": completed_at,
+                    "description": description.strip(),
+                    "engineer": engineer.strip(),
+                    "user": user_id,
+                },
+            )
+        ).scalar_one()
+    )
+
+
+async def list_repairs(session: AsyncSession, machine_id: int) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        text(
+            "SELECT id, completed_at, description, engineer, created_at FROM repair_records "
+            "WHERE machine_id = :m ORDER BY completed_at DESC, id DESC"
+        ),
+        {"m": machine_id},
+    )
     return [dict(r._mapping) for r in rows]
-
-
-async def machine_states(
-    session: AsyncSession, machines: Sequence[dict[str, Any]], now: datetime
-) -> dict[int, dict[str, Any]]:
-    """For every machine: next check and the latest test of every plane with its exceedances."""
-    ids = [m["id"] for m in machines]
-    latest = await _latest_tests(session, ids)
-    results = await _results(session, [t["id"] for t in latest])
-    tolerances = await load_tolerances(session, machines)
-    by_id = {m["id"]: m for m in machines}
-    last_at: dict[int, datetime] = {}
-    planes: dict[int, list[dict[str, Any]]] = {m: [] for m in ids}
-    for test in latest:
-        machine = by_id[test["machine_id"]]
-        evaluated = evaluate(machine, test["plane"], results[test["id"]], tolerances)
-        planes[machine["id"]].append({**test, "exceeded": [r for r in evaluated if r["exceeded"]]})
-        last_at[machine["id"]] = max(test["performed_at"], last_at.get(machine["id"], test["performed_at"]))
-
-    policy_of = await policies(session, ids)
-    run_seconds = await run_seconds_since(session, last_at, now)
-    alarms = await alarms_since(session, last_at)
-    collisions = await journal.list_collisions(session, last_at)
-    states: dict[int, dict[str, Any]] = {}
-    for machine_id in ids:
-        check = next_check(
-            policy_of[machine_id],
-            last_at.get(machine_id),
-            run_seconds.get(machine_id),
-            alarms.get(machine_id, []),
-            [(ts, comment) for ts, comment, _id, _op in collisions.get(machine_id, [])],
-            now,
-        )
-        policy = policy_of[machine_id]
-        states[machine_id] = {
-            "next_check": check.as_dict(),
-            "policy": {
-                "interval_days": policy.interval_days,
-                "interval_run_hours": policy.interval_run_hours,
-                "on_alarm": policy.on_alarm,
-                "on_collision": policy.on_collision,
-                "alarm_patterns": list(policy.alarm_patterns),
-                "is_default": policy.is_default,
-            },
-            "planes": sorted(planes[machine_id], key=itemgetter("plane")),
-        }
-    return states
-
-
-SEVERITY = {"high": 0, "medium": 1, "low": 2}
-
-
-async def worklist(session: AsyncSession, machines: Sequence[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """What the service has to do: exceeded tolerances and due checks of the given machines."""
-    states = await machine_states(session, machines, now)
-    items = []
-    for machine in machines:
-        state = states[machine["id"]]
-        head = {
-            "machine_id": machine["id"],
-            "machine_name": machine["name"],
-            "machine_model": machine.get("model"),
-            "org_name": machine["org_name"],
-            "site_name": machine["site_name"],
-            "area_name": machine["area_name"],
-        }
-        for test in state["planes"]:
-            if test["exceeded"]:
-                items.append(
-                    {
-                        **head,
-                        "kind": "tolerance",
-                        "severity": "high",
-                        "at": test["performed_at"],
-                        "test_id": test["id"],
-                        "plane": test["plane"],
-                        "details": test["exceeded"],
-                    }
-                )
-        check = state["next_check"]
-        status = check["status"]
-        if status in ("event", "overdue", "soon", "never"):
-            severity = {"event": "high", "overdue": "high", "soon": "medium", "never": "low"}[status]
-            at = check["triggers"][0]["ts"] if status == "event" else check["due_date"] or check["last_test_at"]
-            items.append({**head, "kind": f"check_{status}", "severity": severity, "at": at, "next_check": check})
-    items.sort(key=lambda i: (SEVERITY[i["severity"]], i["at"] is None, i["at"] or now))
-    return items

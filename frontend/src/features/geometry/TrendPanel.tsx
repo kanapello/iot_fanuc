@@ -1,47 +1,40 @@
 import { useQuery } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
 import { useMemo, useState } from "react";
-import { api, query, type Catalog, type GeometryStatus } from "../../api/client";
+import { api, query, type Catalog, type Trend, type TrendGroup } from "../../api/client";
 import { Chart } from "../../shared/Chart";
 import { t } from "../../shared/i18n";
 import { formatNumber, keysOf, resultLabel } from "./common";
 
-interface Trend {
-  unit: string;
-  limit: number | null;
-  limit_source: string | null;
-  points: { test_id: number; performed_at: string; value: number; exceeded: boolean }[];
-}
-
 const select = "rounded border border-slate-700 bg-slate-800 px-2 py-1 text-sm";
+const EVENT_COLORS: Record<string, string> = { collision: "#a855f7", repair: "#22c55e" };
 
-export function TrendPanel({ machineId, status, catalog }: { machineId: number; status: GeometryStatus; catalog: Catalog }) {
-  const setups = status.configurations;
-  const [setupIndex, setSetupIndex] = useState(0);
+const groupLabel = (g: TrendGroup) =>
+  `${g.template ? `${t.geometry.template} «${g.template}»` : `${g.plane} · R${formatNumber(g.radius_mm)} · F${formatNumber(g.feed_mm_min)} · ${g.arc_deg}°`} (${g.tests})`;
+
+/** One parameter over comparable tests, with collision marks and completed repairs as vertical lines. */
+export function TrendPanel({ machineId, catalog }: { machineId: number; catalog: Catalog }) {
+  const { data: groups } = useQuery({
+    queryKey: ["ballbar-groups", machineId],
+    queryFn: () => api<TrendGroup[]>(`/machines/${machineId}/ballbar/groups`),
+  });
+  const [groupKey, setGroupKey] = useState("");
   const [key, setKey] = useState("squareness||");
-  const setup = setups[setupIndex];
-  const options = setup
-    ? catalog.parameters.flatMap((p) => keysOf(p, setup.plane, catalog).map(([axis, direction]) => ({ code: p.code, axis, direction })))
+  const group = groups?.find((g) => g.key === groupKey) ?? groups?.[0];
+  const options = group
+    ? catalog.parameters.flatMap((p) => keysOf(p, group.plane, catalog).map(([axis, direction]) => ({ code: p.code, axis, direction })))
     : [];
   const current = options.find((o) => `${o.code}|${o.axis ?? ""}|${o.direction ?? ""}` === key) ?? options[0];
-  const params = setup && current
-    ? query({
-        parameter: current.code,
-        axis: current.axis,
-        direction: current.direction,
-        plane: setup.plane,
-        radius_mm: setup.radius_mm,
-        feed_mm_min: setup.feed_mm_min,
-      })
-    : "";
+  const params =
+    group && current ? query({ group: group.key, parameter: current.code, axis: current.axis, direction: current.direction }) : "";
   const { data: trend } = useQuery({
     queryKey: ["ballbar-trend", machineId, params],
     queryFn: () => api<Trend>(`/machines/${machineId}/ballbar/trend${params}`),
     enabled: Boolean(params),
   });
-  const option = useMemo<EChartsOption>(() => {
-    const limit = trend?.limit;
-    return {
+
+  const option = useMemo<EChartsOption>(
+    () => ({
       tooltip: { trigger: "axis" },
       grid: { left: 50, right: 30, top: 34, bottom: 30 },
       xAxis: { type: "time" },
@@ -50,29 +43,36 @@ export function TrendPanel({ machineId, status, catalog }: { machineId: number; 
         {
           type: "line",
           name: current ? resultLabel(current.code, current.axis, current.direction, catalog) : "",
-          data: (trend?.points ?? []).map((p) => ({
-            value: [p.performed_at, p.value],
-            itemStyle: { color: p.exceeded ? "#ef4444" : "#38bdf8" },
-          })),
+          data: (trend?.points ?? []).map((p) => [p.performed_at, p.value]),
           symbolSize: 9,
+          itemStyle: { color: "#38bdf8" },
           lineStyle: { color: "#38bdf8" },
-          markLine: limit
-            ? { symbol: "none", lineStyle: { color: "#ef4444", type: "dashed" }, data: [{ yAxis: limit }, { yAxis: -limit }], label: { formatter: "{c}" } }
-            : undefined,
+          markLine: {
+            symbol: "none",
+            silent: false,
+            data: (trend?.events ?? []).map((e) => ({
+              xAxis: e.ts,
+              name: `${t.geometry.event[e.kind]}${e.text ? `: ${e.text}` : ""}`,
+              lineStyle: { color: EVENT_COLORS[e.kind], type: "dashed", width: 1.5 },
+              label: { formatter: t.geometry.event[e.kind], color: EVENT_COLORS[e.kind], position: "insideEndTop" },
+            })),
+            tooltip: { formatter: (p: any) => `${p.name}<br/>${new Date(p.value).toLocaleDateString("ru-RU")}` },
+          },
         },
       ],
-    };
-  }, [trend, current, catalog]);
+    }),
+    [trend, current, catalog],
+  );
 
-  if (!setups.length) return null;
+  if (!groups?.length) return null;
   return (
     <div className="space-y-2 rounded-xl bg-slate-900 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="mr-2 font-semibold">{t.geometry.trend}</h3>
-        <select className={select} value={setupIndex} onChange={(e) => setSetupIndex(Number(e.target.value))}>
-          {setups.map((s, i) => (
-            <option key={i} value={i}>
-              {s.plane} · R{formatNumber(s.radius_mm)} · F{formatNumber(s.feed_mm_min)} ({s.tests})
+        <select className={select} value={group?.key ?? ""} onChange={(e) => setGroupKey(e.target.value)}>
+          {groups.map((g) => (
+            <option key={g.key} value={g.key}>
+              {groupLabel(g)}
             </option>
           ))}
         </select>
@@ -88,7 +88,15 @@ export function TrendPanel({ machineId, status, catalog }: { machineId: number; 
         </select>
         <span className="text-xs text-slate-400">{t.geometry.trendHint}</span>
       </div>
-      {trend && trend.points.length ? <Chart option={option} height={260} /> : <p className="text-sm text-slate-400">{t.common.noData}</p>}
+      {trend && trend.points.length ? <Chart option={option} height={280} /> : <p className="text-sm text-slate-400">{t.common.noData}</p>}
+      <div className="flex gap-4 text-xs text-slate-400">
+        {Object.entries(EVENT_COLORS).map(([kind, color]) => (
+          <span key={kind} className="flex items-center gap-1">
+            <span className="inline-block h-0 w-5 border-t-2 border-dashed" style={{ borderColor: color }} />
+            {t.geometry.event[kind]}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
