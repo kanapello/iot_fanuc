@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from collector.buffer import Buffer
-from collector.config import BufferConfig, PartCounterConfig
+from collector.config import BufferConfig, FanucFocasMachine, PartCounterConfig
 from collector.drivers.base import DriverConnectionError
 from collector.drivers.fanuc_focas import FanucFocasDriver
 
@@ -37,32 +40,79 @@ def test_buffer_keeps_messages_and_seq_across_restart(tmp_path: Path) -> None:
     assert lost.epoch != epoch and lost.next_seq("m07") == 1
 
 
-def test_focas_driver_against_fake_library(tmp_path: Path) -> None:
+@pytest.fixture
+def fake_lib(tmp_path: Path) -> Callable[[str], int]:
+    """A freshly built fake Fwlib; returns a counter of calls per FOCAS function."""
     compiler = shutil.which("gcc") or shutil.which("cc")
     if compiler is None:
         pytest.skip("C compiler not available")
-    lib = tmp_path / "libfakefwlib.so"
-    subprocess.run([compiler, "-shared", "-fPIC", "-o", str(lib), str(HERE / "fake_fwlib.c")], check=True)
+    lib_path = tmp_path / "libfakefwlib.so"
+    subprocess.run([compiler, "-shared", "-fPIC", "-o", str(lib_path), str(HERE / "fake_fwlib.c")], check=True)
+    lib = ctypes.CDLL(str(lib_path))
+    lib.fake_calls.restype = ctypes.c_int
+    lib.fake_calls.argtypes = [ctypes.c_char_p]
+    calls: Any = lambda name: int(lib.fake_calls(name.encode()))  # noqa: E731
+    calls.path = str(lib_path)
+    return cast(Callable[[str], int], calls)
 
-    driver = FanucFocasDriver(str(lib), "10.0.0.1")
+
+def test_focas_driver_reads_only_the_minimum_by_default(fake_lib: Any) -> None:
+    """Default config: status, program, part counter, alarms. No feed, spindle speed or load calls."""
+    driver = FanucFocasDriver(fake_lib.path, "10.0.0.1")
     driver.connect()
     snap = driver.read_snapshot()
     assert (snap.mode, snap.aut_code, snap.run, snap.run_code) == ("MEM", 1, "START", 3)
     assert (snap.alarm, snap.alarm_code, snap.emergency, snap.emergency_code) == (False, 0, False, 0)
     assert (snap.program, snap.program_name, snap.part_count) == ("O1234", "O1234", 15873)
-    assert (snap.feed_actual, snap.spindle_speed, snap.spindle_load) == (1250.0, 8000.0, 37.5)
+    assert (snap.feed_actual, snap.spindle_speed, snap.spindle_load) == (None, None, None)
+    assert [fake_lib(name) for name in ("cnc_actf", "cnc_acts", "cnc_rdspmeter")] == [0, 0, 0]
+    assert [fake_lib(name) for name in ("cnc_statinfo", "cnc_rdprgnum", "cnc_exeprgname", "cnc_rdmacro")] == [
+        1,
+        1,
+        1,
+        1,
+    ]
     driver.disconnect()
 
-    alarmed = FanucFocasDriver(str(lib), "10.0.0.2", part_counter=PartCounterConfig(source="param", address=6711))
+    alarmed = FanucFocasDriver(fake_lib.path, "10.0.0.2", part_counter=PartCounterConfig(source="param", address=6711))
     alarmed.connect()
     snap = alarmed.read_snapshot()
     assert (snap.alarm, snap.alarm_code, snap.run) == (True, 1, "STOP")
-    assert (snap.program_name, snap.spindle_load, snap.part_count) == ("O1234", None, 15873)
+    assert (snap.program_name, snap.part_count) == ("O1234", 15873)
     assert [(a.code, a.message) for a in alarmed.read_alarms()] == [("SV0401", "V-READY OFF")]
     alarmed.disconnect()
 
     with pytest.raises(DriverConnectionError):
-        FanucFocasDriver(str(lib), "10.9.9.9").connect()
+        FanucFocasDriver(fake_lib.path, "10.9.9.9").connect()
+
+
+def test_focas_driver_reads_feed_speed_and_load_only_when_enabled(fake_lib: Any) -> None:
+    signals = ["status", "program", "part_count", "alarms", "feed_actual", "spindle_speed", "spindle_load"]
+    driver = FanucFocasDriver(fake_lib.path, "10.0.0.1", signals=signals)
+    driver.connect()
+    snap = driver.read_snapshot()
+    assert (snap.feed_actual, snap.spindle_speed, snap.spindle_load) == (1250.0, 8000.0, 37.5)
+    assert [fake_lib(name) for name in ("cnc_actf", "cnc_acts", "cnc_rdspmeter")] == [1, 1, 1]
+    # only the status: one call per poll
+    lean = FanucFocasDriver(fake_lib.path, "10.0.0.1", signals=["status"])
+    lean.connect()
+    lean.read_snapshot()
+    assert (fake_lib("cnc_statinfo"), fake_lib("cnc_rdprgnum"), fake_lib("cnc_rdmacro")) == (2, 1, 1)
+
+
+def test_machine_config_defaults_to_the_minimum() -> None:
+    machine = FanucFocasMachine(id="m07", driver="fanuc_focas", ip="192.168.10.57")
+    assert machine.signals == ["status", "program", "part_count", "alarms"]
+    assert machine.poll_interval_ms == 1000
+    for interval in (2000, 5000):
+        assert FanucFocasMachine(id="m07", driver="fanuc_focas", ip="x", poll_interval_ms=interval).poll_interval_ms
+    for interval in (500, 6000):
+        with pytest.raises(ValueError):
+            FanucFocasMachine(id="m07", driver="fanuc_focas", ip="x", poll_interval_ms=interval)
+    with pytest.raises(ValueError):  # the timeline needs the status
+        FanucFocasMachine(id="m07", driver="fanuc_focas", ip="x", signals=["program"])
+    with pytest.raises(ValueError):
+        FanucFocasMachine(id="m07", driver="fanuc_focas", ip="x", signals=["status", "servo_load"])  # type: ignore[list-item]
 
 
 def test_focas_driver_puts_the_library_folder_first_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

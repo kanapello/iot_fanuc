@@ -10,7 +10,8 @@ mqtt:
   password_env: MM_MQTT_PASSWORD
 buffer:
   path: /app/data/buffer.db
+# The demo charts need feed, spindle speed and load: enabled explicitly (the default is the minimum).
 machines:
-  - { id: sim01, driver: simulator, backfill_hours: 8, profile: milling_normal }
-  - { id: sim02, driver: simulator, backfill_hours: 8, profile: frequent_stops, offset_s: 300 }
-  - { id: sim03, driver: simulator, backfill_hours: 8, profile: alarm, offset_s: 500 }
+  - { id: sim01, driver: simulator, backfill_hours: 8, profile: milling_normal, signals: &demo_signals [status, program, part_count, alarms, feed_actual, spindle_speed, spindle_load] }
+  - { id: sim02, driver: simulator, backfill_hours: 8, profile: frequent_stops, offset_s: 300, signals: *demo_signals }
+  - { id: sim03, driver: simulator, backfill_hours: 8, profile: alarm, offset_s: 500, signals: *demo_signals }

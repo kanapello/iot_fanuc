@@ -11,6 +11,8 @@ from collector.drivers.base import Alarm, DriverConnectionError, MachineSnapshot
 from collector.messages import MessageFactory, OutgoingMessage, uuid7
 from collector.poller import MachinePoller
 
+ALL_SIGNALS = ("status", "program", "part_count", "alarms", "feed_actual", "spindle_speed", "spindle_load")
+
 
 class FakeDriver:
     def __init__(self) -> None:
@@ -46,7 +48,7 @@ class ListPublisher:
 
 
 class Harness:
-    def __init__(self, clock: FakeClock) -> None:
+    def __init__(self, clock: FakeClock, signals: tuple[str, ...] = ALL_SIGNALS) -> None:
         self.clock = clock
         self.driver = FakeDriver()
         self.publisher = ListPublisher()
@@ -57,6 +59,7 @@ class Harness:
             MessageFactory("demo", "plant1", "edge1", "m07"),
             self.publisher,
             keyframe_interval_s=10,
+            signals=signals,
             now=lambda: self.start + timedelta(seconds=clock.value - 1000),
             monotonic=clock,
         )
@@ -135,3 +138,26 @@ def test_uuid7_is_time_ordered() -> None:
     first, second = uuid7(1_700_000_000_000), uuid7(1_700_000_000_001)
     assert first[14] == "7" and first[19] in "89ab"
     assert first[:13] < second[:13]
+
+
+def test_only_configured_signals_are_published(clock: FakeClock, validators: dict[str, Draft202012Validator]) -> None:
+    """With the default (minimal) signals feed, speed and load are not published and alarms are read only if listed."""
+    h = Harness(clock, signals=("status", "program", "part_count"))  # alarms not configured either
+    h.driver.snapshot = MachineSnapshot(
+        mode="MEM", run="START", alarm=True, program="O1", part_count=5, feed_actual=900.0, spindle_load=40.0
+    )
+    reads = []
+    h.driver.read_alarms = lambda: reads.append(1) or [Alarm("SV0401", "V-READY OFF")]  # type: ignore[method-assign]
+    h.tick()
+    (body,) = h.publisher.bodies("telemetry")
+    assert body["data"]["part_count"] == 5 and body["data"]["alarm"] is True
+    assert not {"feed_actual", "spindle_speed", "spindle_load", "feed_override"} & body["data"].keys()
+    assert reads == [] and h.publisher.bodies("event") == []
+    validators["telemetry.v1"].validate(body)  # the minimum is a valid telemetry.v1 message
+
+    default = Harness(clock, signals=("status", "program", "part_count", "alarms"))
+    default.driver.snapshot = h.driver.snapshot
+    default.driver.alarms = [Alarm("SV0401", "V-READY OFF")]
+    default.tick()
+    assert "feed_actual" not in default.publisher.bodies("telemetry")[0]["data"]
+    assert [e["data"]["code"] for e in default.publisher.bodies("event")] == ["SV0401"]

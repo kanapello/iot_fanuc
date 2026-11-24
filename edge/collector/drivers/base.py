@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
+
+# Snapshot fields that belong to each configurable signal (collector.config.Signal).
+# Overrides are not read by the collector at all for now: they are never published.
+SIGNAL_FIELDS: dict[str, tuple[str, ...]] = {
+    "status": ("mode", "aut_code", "run_code", "alarm_code", "emergency_code", "run", "motion", "emergency", "alarm"),
+    "program": ("program", "program_name"),
+    "part_count": ("part_count",),
+    "alarms": (),
+    "feed_actual": ("feed_actual",),
+    "spindle_speed": ("spindle_speed",),
+    "spindle_load": ("spindle_load",),
+}
+
+
+def published_fields(signals: Collection[str]) -> frozenset[str]:
+    """Telemetry fields of the configured signals (plus ``connected``)."""
+    return frozenset({"connected"}).union(*(SIGNAL_FIELDS[s] for s in signals))
 
 
 class DriverError(Exception):
