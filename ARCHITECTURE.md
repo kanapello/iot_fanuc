@@ -31,28 +31,30 @@
 ```
  КОНТУР 1: EDGE (цех)                 КОНТУР 2–4: СЕРВЕР (Docker Compose)
 ┌──────────────────────────┐        ┌──────────────────────────────────────────────┐
-│ edge-collector           │  MQTT  │  mosquitto (MQTT broker, TLS, auth)           │
-│  ├ drivers/              │ QoS 1  │        │                                      │
-│  │  ├ fanuc_focas        │───────▶│        ▼                                      │
-│  │  └ simulator          │        │  backend: ingest  ──▶ raw hypertables         │
-│  ├ poller (поток/станок) │        │     │  state machine ──▶ state_intervals       │
-│  ├ buffer (SQLite)       │        │     ▼                                         │
-│  └ publisher (MQTT)      │        │  backend: worker  ──▶ OEE aggregates, пересчёт │
-└──────────────────────────┘        │     │                                         │
-       │ FOCAS/Ethernet :8193       │  backend: api (REST + WebSocket) ◀── Redis    │
-       ▼                            │     │                    (live state)          │
- Fanuc 0i-MD × N                    │     ▼                                         │
-                                    │  frontend (nginx): operator / dashboard /      │
-                                    │                    analytics / admin           │
-                                    │  timescaledb · redis · prometheus · grafana    │
+│ edge-collector           │  MQTT  │  mosquitto (MQTT broker, auth, ACL)          │
+│  ├ drivers/              │ QoS 1  │        │                                     │
+│  │  ├ fanuc_focas        │───────▶│        ▼                                     │
+│  │  └ simulator          │        │  backend: ingest ──▶ raw hypertables         │
+│  ├ poller (поток/станок) │        │        │  отметка «данные изменились»        │
+│  ├ buffer (SQLite)       │        │        ▼                                     │
+│  └ publisher (MQTT)      │        │  backend: worker ──▶ state_intervals,        │
+└──────────────────────────┘        │          part_events, OEE; live ──▶ Redis    │
+       │ FOCAS/Ethernet :8193       │        │                                     │
+       ▼                            │  backend: api (REST + WebSocket) ◀── Redis   │
+ Fanuc 0i-MD × N                    │        │                                     │
+                                    │        ▼                                     │
+                                    │  frontend (nginx): operator / dashboard /    │
+                                    │    analytics / alarms / repairs / service /  │
+                                    │    admin                                     │
+                                    │  timescaledb · redis                         │
                                     └──────────────────────────────────────────────┘
 ```
 
 | Контур | Назначение | Компоненты |
 |---|---|---|
 | 1. Сбор (Edge) | Опрос стоек, буферизация, доставка | `edge/` (Python), драйвер FOCAS, SQLite-буфер |
-| 2. Приём и хранение | Брокер, нормализация, таймлайн, хранение | Mosquitto, `backend/app/ingest`, TimescaleDB, Redis |
-| 3. Аналитика | OEE, простои, брак, отчёты, уведомления | `backend/app/oee`, `backend/app/reports`, `backend/app/notify` |
+| 2. Приём и хранение | Брокер, проверка и запись сырых данных, хранение | Mosquitto, `backend/app/ingest`, TimescaleDB, Redis |
+| 3. Аналитика | Таймлайн, OEE, простои, брак, отчёты, журнал аварий, ремонт и ТО, архив геометрии | `backend/app/timeline`, `oee`, `reports`, `repairs`, `geometry` (уведомления `notify` — запланированы) |
 | 4. Представление | API, экран оператора, цеховой ТВ-дашборд, админка | `backend/app/api`, `frontend/` |
 
 ---
@@ -63,8 +65,8 @@
 Опрашивает N станков, ставит метку времени, кладёт в локальный буфер, публикует в MQTT. Работает автономно при отсутствии связи с сервером.
 
 ### 3.2. Платформы
-- **Windows (основной вариант в цеху):** Python 3.12, `Fwlib64.dll` (FOCAS2). Упаковка PyInstaller → `.exe`, запуск как службы Windows (NSSM или pywin32). Если на объекте доступна только `Fwlib32.dll` — сборка под 32-битный Python.
-- **Linux:** `libfwlib32.so` (x86 / ARM, из Fanuc FOCAS Linux library), запуск в Docker (`deploy/docker-compose.edge.yml`) или systemd.
+- **Windows (основной вариант в цеху):** Python 3.12, `Fwlib64.dll` (FOCAS2) вместе с `fwlibe64.dll` и `fwlib0iD64.dll` в одной папке — коллектор ставит её первой в `PATH` процесса. Запланировано: упаковка PyInstaller → `.exe`, запуск как службы Windows (NSSM или pywin32); пока коллектор и проба запускаются из Python. Если на объекте доступна только `Fwlib32.dll` — 32-битный Python.
+- **Linux:** `libfwlib32.so` (x86 / ARM, из Fanuc FOCAS Linux library), запуск в Docker (образ `edge/Dockerfile`) или systemd.
 - Библиотеки FOCAS **не хранятся в репозитории** (лицензия Fanuc) — кладутся в `edge/vendor/` вручную, путь задаётся в конфиге.
 
 ### 3.3. Структура
@@ -387,7 +389,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 - Аутентификация: вход по логину и паролю (JWT); пользователи и роли в БД (п. 7.3). Суперадмин создаётся при
   первом старте из `.env`. Киоск — device-токен, привязанный к одному станку (экран оператора) или одному
   участку (ТВ-дашборд); в БД хранится только хеш, токен выдаёт и отзывает администратор.
-- OpenAPI-схема → генерация TypeScript-клиента для фронтенда.
+- OpenAPI-схему строит FastAPI. TypeScript-клиент пока написан вручную (`frontend/src/api/client.ts`); генерация из OpenAPI — когда у маршрутов появятся модели ответов.
 
 ### 7.3. Роли и проверка доступа
 Роль выдаётся на узел иерархии (`memberships`): только `org_id` — вся организация, с `site_id` — площадка,
@@ -440,20 +442,21 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 |---|---|---|
 | `mosquitto` | eclipse-mosquitto:2 | — |
 | `db` | timescale/timescaledb:2.32.0-pg16 (версия закреплена) | — |
-| `redis` | redis:7 | — |
+| `redis` | redis:7-alpine (кэш, без сохранения на диск) | — |
 | `migrate` | backend (alembic upgrade head) | — |
 | `api` | backend (`uvicorn`) | — |
 | `ingest` | backend (`python -m app.ingest`) | — |
 | `worker` | backend (`python -m app.worker`) | — |
 | `web` | frontend (nginx, static + reverse proxy `/api`, `/ws`) | — |
 | `simulator-a`, `simulator-b` | edge (driver=simulator), два коллектора на двух площадках демо-организации | `dev` |
-| `prometheus`, `grafana` | — | `monitoring` |
-| `backup` | pg_dump по расписанию | `backup` |
 
-Конфиг через `.env` (пример — `.env.example`). Тома для БД, брокера, бэкапов.
+Конфиг через `.env` (пример — `.env.example`). Тома для БД, брокера и буферов симуляторов.
+Запланировано (этап 6), пока нет: `prometheus` и `grafana` (профиль `monitoring`), `backup` — pg_dump по расписанию.
 
-### 8.2. Edge — `deploy/docker-compose.edge.yml` (Linux) или Windows-установщик
-Коллектор, конфиг `config.yaml`, том для буфера.
+### 8.2. Edge
+Коллектор, конфиг `config.yaml`, том для буфера; образ — `edge/Dockerfile` (Linux). Сеть коллектора и проверка
+связи со стойкой — `docs/runbooks/collector-network.md`. Запланировано, пока нет: compose-файл для площадки
+(`deploy/docker-compose.edge.yml`) и установщик Windows.
 
 ### 8.3. Сеть и безопасность
 - Сеть станков (OT) отделена от офисной (IT). Коллектор стоит на границе: FOCAS — в OT, MQTT — исходящее соединение в сторону сервера.
@@ -465,9 +468,10 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
   инженеров и согласие клиента на доступ сервиса не делаются на этом этапе.
 
 ### 8.4. Наблюдаемость
-- Prometheus-метрики: backend (`/metrics`), ingest lag, размер очереди пересчёта, коллекторы (через heartbeat → экспортер в backend).
-- Grafana-дашборд «Здоровье системы»: коллекторы online, буферы, задержка приёма, ошибки FOCAS по станкам.
-- Структурированные JSON-логи.
+- Есть: структурированные JSON-логи; состояние коллекторов (heartbeat, буфер, разрывы `seq`) — `GET /api/v1/collectors`
+  и раздел админки; счётчики приёма раз в 30 с в логе `ingest`.
+- Запланировано (этап 6), пока нет: Prometheus-метрики (backend `/metrics`, задержка приёма, очередь пересчёта,
+  коллекторы) и Grafana-дашборд «Здоровье системы».
 
 ---
 
@@ -475,13 +479,13 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 
 | Слой | Технологии |
 |---|---|
-| Edge | Python 3.12, ctypes (FOCAS2), paho-mqtt, SQLite, pydantic, PyInstaller |
+| Edge | Python 3.12, ctypes (FOCAS2), paho-mqtt, SQLite, pydantic (PyInstaller для Windows — запланирован) |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), asyncpg, Alembic, pydantic v2, aiomqtt, redis-py |
 | БД | PostgreSQL 16 + TimescaleDB, Redis 7 |
 | Брокер | Mosquitto 2 |
-| Frontend | React 18, TypeScript, Vite, TanStack Query, TanStack Router, Tailwind CSS, ECharts |
-| Тесты | pytest, testcontainers, vitest, Playwright (e2e) |
-| Инструменты | uv (Python), pnpm (frontend), ruff, mypy, pre-commit, Makefile |
+| Frontend | React 18, TypeScript, Vite, TanStack Query, react-router-dom, Tailwind CSS, ECharts |
+| Тесты | pytest, testcontainers (PostgreSQL + TimescaleDB, Mosquitto), golden-тесты таймлайна и OEE; фронтенд — проверка типов и сборка |
+| Инструменты | uv (Python), pnpm (frontend), ruff, mypy, Makefile, GitHub Actions (CI) |
 
 ---
 
@@ -493,39 +497,37 @@ machine-monitor/
 ├── ARCHITECTURE.md
 ├── Makefile
 ├── .env.example
+├── CHANGELOG.md
+├── .github/workflows/ci.yml  # CI: backend, edge, frontend, Docker-образы
 ├── edge/                     # Контур 1 (см. 3.3)
 ├── backend/
 │   ├── pyproject.toml
 │   ├── alembic/
 │   ├── app/
 │   │   ├── core/             # config, db, logging, security, общие модели
-│   │   ├── ingest/           # MQTT-приём, валидация, state machine
+│   │   ├── ingest/           # MQTT-приём, валидация, запись сырых данных
 │   │   ├── timeline/         # правила состояний, построение и пересчёт интервалов
 │   │   ├── oee/              # расчёт OEE
 │   │   ├── geometry/         # архив геометрической точности сервиса: ballbar, тренды
 │   │   ├── repairs/          # заявки на ремонт, журнал ремонтов, обслуживание по наработке
 │   │   ├── reports/          # отчёты, журнал аварий, экспорт
-│   │   ├── notify/           # уведомления
-│   │   ├── worker/           # очередь задач, планировщик
+│   │   ├── worker/           # таймлайн, OEE и live по отметкам пересчёта
 │   │   ├── api/              # FastAPI роутеры, WebSocket
 │   │   └── admin/            # справочники
 │   └── tests/
 ├── frontend/
 │   └── src/
-│       ├── api/              # сгенерированный клиент
-│       ├── features/operator|dashboard|analytics|admin
+│       ├── api/              # клиент API (пока написан вручную)
+│       ├── features/         # operator, dashboard, analytics, alarms, repairs, service, geometry, admin, auth
 │       └── shared/
 ├── shared/
 │   └── schemas/              # JSON Schema сообщений MQTT (контракт)
 ├── deploy/
 │   ├── docker-compose.yml
-│   ├── docker-compose.edge.yml
-│   ├── mosquitto/
-│   ├── grafana/
-│   └── prometheus/
+│   └── mosquitto/
 └── docs/
     ├── adr/                  # архитектурные решения
-    └── runbooks/             # установка, обновление, восстановление из бэкапа
+    └── runbooks/             # быстрый старт, сеть коллектора
 ```
 
 ---
