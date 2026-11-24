@@ -126,3 +126,7 @@ python edge/tools/focas_probe.py --ip 192.168.10.57 --port 8193 --lib edge/vendo
 повторяет опрос раз в секунду. Fwlib64.dll при подключении сама грузит `fwlibe64.dll` и
 `fwlib0iD64.dll` по имени, поэтому проба и коллектор ставят папку библиотеки первой в `PATH` процесса
 (на живой стойке без этого был `EW_NODLL`). Все DLL Fanuc должны лежать в одной папке.
+
+Если стойка не отвечает — [docs/runbooks/collector-network.md](docs/runbooks/collector-network.md): где
+ставить коллектор, почему на его ПК не должно быть VPN, проверка пути через `Find-NetRoute` и порядок
+проверки: `ping`, `Test-NetConnection`, проба.
