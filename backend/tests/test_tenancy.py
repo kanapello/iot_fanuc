@@ -303,6 +303,10 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
             Call(f"/admin/{name}/{row}", "hidden") for name, row in crud_rows.items()
         ],
         ("POST", "/recalc"): [Call("/recalc", "empty", params={"site_id": a.site_id})],
+        ("GET", "/cycles/stats"): [
+            Call("/cycles/stats", "clean", params=period),
+            Call("/cycles/stats", "empty", params=aimed),
+        ],
         ("GET", "/users"): [Call("/users", "clean")],
         ("POST", "/users"): [
             Call("/users", "hidden", json={"login": "intruder", "password": PASSWORD, "membership": membership})

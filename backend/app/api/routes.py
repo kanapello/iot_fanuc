@@ -46,6 +46,7 @@ from app.core.access import (
 )
 from app.ingest.health import find_seq_gaps
 from app.oee import service as oee
+from app.reports import cycles as cycle_reports
 from app.reports import service as reports
 from app.timeline import service as timeline
 from app.worker.live import read_live
@@ -249,6 +250,20 @@ async def get_oee(
 ) -> list[dict[str, Any]]:
     start, end, _now = _range(start, end)
     return await oee.query(session, machines, period, start, end, group_machines=group == "area")
+
+
+@router.get("/cycles/stats", tags=["analytics"])
+async def get_cycle_stats(
+    session: Session,
+    machines: AnalyticsMachines,
+    start: From,
+    end: To = None,
+    program: Annotated[str | None, Query(max_length=64)] = None,
+) -> list[dict[str, Any]]:
+    """Cycles by machine and program: machine time, part change, interruptions, the norm; by shift and by day."""
+    start, end, _now = _range(start, end)
+    found = await cycle_reports.stats(session, machines, start, end)
+    return [row for row in found if program is None or row["program"] == program]
 
 
 @router.get("/reports/pareto", tags=["analytics"])
