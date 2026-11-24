@@ -1,5 +1,7 @@
 # iot_fanuc — мониторинг станков с ЧПУ
 
+[![CI](https://github.com/kanapello/iot_fanuc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kanapello/iot_fanuc/actions/workflows/ci.yml)
+
 Платформа мониторинга станков (Fanuc 0i-MD и др.) и расчёта OEE — сервис для многих
 предприятий-клиентов: одна установка, данные клиентов разделены по организациям, сотрудники
 сервисной компании видят станки всех клиентов. Сейчас работает сквозной каркас на симуляторе.
@@ -95,6 +97,11 @@ QC20 (Ballbar 20). В карточке станка — тесты с ручны
 ```bash
 make test
 ```
+
+То же на GitHub Actions (`.github/workflows/ci.yml`) для каждого pull request и `main`: backend (ruff,
+mypy, pytest на PostgreSQL + TimescaleDB и Mosquitto в testcontainers), edge (ruff, mypy, pytest),
+frontend (сборка), сборка Docker-образов `backend`, `web`, `edge`. В `main` сливается только pull request
+с зелёными проверками.
 
 ```bash
 make lint
