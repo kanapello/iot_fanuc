@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -88,13 +89,35 @@ class IngestService:
     organization and site that collector belongs to. Storing is idempotent
     (``ON CONFLICT DO NOTHING`` on the message key), so a batch can be retried
     and messages can be redelivered any number of times.
+
+    Collectors and machines are cached and reloaded every ``refresh_s`` seconds
+    (and at once when an unknown collector appears): a collector moved to another
+    site or deleted stops writing into its old place within that time.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], validator: MessageValidator) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        validator: MessageValidator,
+        refresh_s: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._session_factory = session_factory
         self._validator = validator
+        self._refresh_s = refresh_s
+        self._clock = clock
+        self._loaded_at: float | None = None
         self._collectors: dict[str, CollectorRef] = {}
         self._machines: dict[tuple[int, str], int] = {}
+
+    async def _refresh_directories(self, session: AsyncSession, collector_ids: set[str]) -> None:
+        """Reload the collectors (and forget the machines) when stale or when a collector is unknown."""
+        now = self._clock()
+        stale = self._loaded_at is None or now - self._loaded_at >= self._refresh_s
+        if stale or collector_ids - self._collectors.keys():
+            self._collectors = await collector_directory(session)
+            self._machines = {}  # looked up again (register_machines) on first use
+            self._loaded_at = now
 
     def _check_origin(self, msg: ParsedMessage) -> str | None:
         """Reason to reject, if the collector may not write to the topic's site."""
@@ -112,11 +135,9 @@ class IngestService:
         parsed_messages = [(topic, payload, self._validator.parse(topic, payload)) for topic, payload in messages]
 
         async with self._session_factory() as session, session.begin():
-            unknown = {
-                p.collector_id for _, _, p in parsed_messages if isinstance(p, ParsedMessage)
-            } - self._collectors.keys()
-            if unknown:  # a collector registered after ingest started
-                self._collectors = await collector_directory(session)
+            await self._refresh_directories(
+                session, {p.collector_id for _, _, p in parsed_messages if isinstance(p, ParsedMessage)}
+            )
 
             for topic, payload, parsed in parsed_messages:
                 if isinstance(parsed, Rejected):

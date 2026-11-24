@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     ingest_share_group: str = ""
     ingest_session_expiry_s: int = 7 * 24 * 3600
     ingest_batch_size: int = 500
+    # Collectors and machines are cached by ingest; a moved or deleted collector is noticed within this time.
+    ingest_directory_refresh_s: float = 30.0
     # Touched while the MQTT subscription is active; used by the container healthcheck.
     ingest_ready_file: Path | None = None
 
