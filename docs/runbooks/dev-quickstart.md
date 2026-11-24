@@ -83,7 +83,8 @@ python edge/tools/focas_probe.py --ip 192.168.10.57 --port 8193 --lib edge/vendo
 `fwlibe64.dll` и `fwlib0iD64.dll` в одной папке. Разрядность Python должна совпадать с разрядностью
 библиотеки. Проба сама ставит эту папку первой в `PATH` (на Windows — ещё `SetDllDirectoryW`):
 вспомогательные DLL грузятся по имени, `os.add_dll_directory` для них не работает (`EW_NODLL`).
-`--out` дописывает вывод в файл UTF-8, `--watch` — опрос раз в секунду.
+`--out` дописывает вывод в файл UTF-8, `--watch` — опрос раз в секунду. Сеть коллектора и порядок
+проверки связи со стойкой — [collector-network.md](collector-network.md).
 
 ## Подключение реального коллектора
 
