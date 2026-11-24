@@ -77,6 +77,7 @@ function RequestActions({ request, me }: { request: RepairRequest; me: Me }) {
     staleTime: 300_000,
   });
   const [executor, setExecutor] = useState<number | "">("");
+  const [stepTime, setStepTime] = useState("");
   const [error, setError] = useState("");
   const run = async (action: () => Promise<unknown>) => {
     setError("");
@@ -87,7 +88,11 @@ function RequestActions({ request, me }: { request: RepairRequest; me: Me }) {
       setError(e instanceof Error ? e.message : t.common.error);
     }
   };
-  const status = (body: Record<string, unknown>) => api(`/repair-requests/${request.id}/status`, { method: "POST", body });
+  const status = (body: Record<string, unknown>) =>
+    api(`/repair-requests/${request.id}/status`, {
+      method: "POST",
+      body: { ...body, at: stepTime ? new Date(stepTime).toISOString() : undefined },
+    });
   const voided = Boolean(request.voided_at);
   const canVoid = !voided && request.status !== "done" && (manage || request.status === "new");
   const executorSelect = (
@@ -140,6 +145,12 @@ function RequestActions({ request, me }: { request: RepairRequest; me: Me }) {
               {t.repairs.reassign}
             </button>
           </>
+        )}
+        {manage && request.status !== "done" && (
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            {t.repairs.stepTime}
+            <input type="datetime-local" className={input} value={stepTime} onChange={(e) => setStepTime(e.target.value)} />
+          </label>
         )}
         {canVoid && (
           <button
@@ -202,6 +213,11 @@ function RequestDetail({ id, me }: { id: number; me: Me }) {
             <li key={i}>
               <span className="tabular text-slate-400">{formatMoment(h.ts)}</span> · {t.repairs.actions[h.action] ?? h.action} · {h.user_name}
               {h.comment ? ` · ${h.comment}` : ""}
+              {h.backdated && (
+                <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-300">
+                  {t.repairs.backdated} ({t.repairs.enteredAt} {formatMoment(h.recorded_at)})
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -289,6 +305,7 @@ function RequestRow({ request: r, me, expanded, onToggle }: { request: RepairReq
         </td>
         <td className="px-2 py-2">
           <RequestStatusChip status={r.status} voided={voided} />
+          {r.backdated.length > 0 && <div className="mt-1 text-xs text-amber-300">{t.repairs.backdated}</div>}
         </td>
         <td className="tabular whitespace-nowrap px-2 py-2">{formatMoment(r.failure_ts)}</td>
         <td className="px-2 py-2">{r.executor_name ?? "—"}</td>

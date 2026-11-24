@@ -11,12 +11,16 @@ Reaction and restoration are not stored, they are computed from the machine time
 * reaction — from the failure to the start of work (status "in_progress");
 * restoration — from the failure to the first moment the machine is in RUN again on the timeline
   (zero if it was running at the moment of the failure).
+
+Every step keeps the moment stated for it and the moment it was entered into the system. A step
+entered more than 30 minutes after its stated moment is "backdated": the customer sees a mark,
+because the reaction time rests on the word of whoever entered it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -28,12 +32,24 @@ from app.timeline import service as timeline
 STATUSES = ("new", "accepted", "in_progress", "done")
 NEXT = {"new": "accepted", "accepted": "in_progress", "in_progress": "done"}
 STEP_COLUMN = {"accepted": "accepted_at", "in_progress": "started_at", "done": "completed_at"}
+RECORDED_COLUMN = {
+    "accepted": "accepted_recorded_at",
+    "in_progress": "started_recorded_at",
+    "done": "completed_recorded_at",
+}
+STEP_ACTIONS = tuple(STEP_COLUMN)
+BACKDATED_AFTER = timedelta(minutes=30)
 
 _COLUMNS = (
     "id, machine_id, status, description, alarm_ts, alarm_code, alarm_message, failure_ts, created_by, "
-    "created_by_name, created_at, executor_id, executor_name, accepted_at, started_at, completed_at, work_done, "
-    "voided_at, void_reason"
+    "created_by_name, created_at, executor_id, executor_name, accepted_at, started_at, completed_at, "
+    "accepted_recorded_at, started_recorded_at, completed_recorded_at, work_done, voided_at, void_reason"
 )
+
+
+def backdated(stated: datetime | None, recorded: datetime | None) -> bool:
+    """Entered more than 30 minutes after the moment stated for it."""
+    return stated is not None and recorded is not None and recorded - stated > BACKDATED_AFTER
 
 
 class RequestConflict(Exception):
@@ -87,15 +103,19 @@ async def _history(
     user_name: str,
     comment: str | None,
     ts: datetime | None = None,
+    recorded_at: datetime | None = None,
 ) -> None:
+    """One action of the log: ``ts`` is the moment stated for it, ``recorded_at`` when it was entered."""
     await session.execute(
         text(
-            "INSERT INTO repair_request_history (request_id, ts, action, executor_id, user_id, user_name, comment) "
-            "VALUES (:r, COALESCE(:ts, now()), :action, :executor, :user, :name, :comment)"
+            "INSERT INTO repair_request_history (request_id, ts, recorded_at, action, executor_id, user_id, "
+            "user_name, comment) VALUES (:r, COALESCE(:ts, now()), COALESCE(:recorded, now()), :action, :executor, "
+            ":user, :name, :comment)"
         ),
         {
             "r": request_id,
             "ts": ts,
+            "recorded": recorded_at,
             "action": action,
             "executor": executor_id,
             "user": user_id,
@@ -115,12 +135,15 @@ async def get(session: AsyncSession, request_id: int) -> dict[str, Any] | None:
 async def history(session: AsyncSession, request_id: int) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(
-            "SELECT ts, action, executor_id, user_name, comment FROM repair_request_history "
+            "SELECT ts, recorded_at, action, executor_id, user_name, comment FROM repair_request_history "
             "WHERE request_id = :r ORDER BY ts, id"
         ),
         {"r": request_id},
     )
-    return [dict(r._mapping) for r in rows]
+    entries = [dict(r._mapping) for r in rows]
+    for entry in entries:
+        entry["backdated"] = entry["action"] in STEP_ACTIONS and backdated(entry["ts"], entry["recorded_at"])
+    return entries
 
 
 async def list_requests(
@@ -157,7 +180,7 @@ async def for_alarms(session: AsyncSession, keys: Sequence[AlarmKey]) -> dict[Al
 
 
 async def with_times(session: AsyncSession, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Add reaction and restoration computed from the timeline (see the module docstring)."""
+    """Add reaction and restoration computed from the timeline, and the steps entered retroactively."""
     restored = await timeline.first_run_at(session, [(r["machine_id"], r["failure_ts"]) for r in requests])
     for request, restored_at in zip(requests, restored, strict=True):
         failure = request["failure_ts"]
@@ -165,6 +188,9 @@ async def with_times(session: AsyncSession, requests: list[dict[str, Any]]) -> l
         request["reaction_s"] = (started - failure).total_seconds() if started else None
         request["restored_at"] = restored_at
         request["restoration_s"] = (restored_at - failure).total_seconds() if restored_at else None
+        request["backdated"] = [
+            step for step in STEP_ACTIONS if backdated(request[STEP_COLUMN[step]], request[RECORDED_COLUMN[step]])
+        ]
     return requests
 
 
@@ -211,19 +237,21 @@ async def advance(
     executor = executor or {"id": request["executor_id"], "name": request["executor_name"]}
     await session.execute(
         text(
-            f"UPDATE repair_requests SET status = :status, {STEP_COLUMN[target]} = :at, executor_id = :e, "
-            "executor_name = :n, work_done = COALESCE(:work, work_done) WHERE id = :id"
+            f"UPDATE repair_requests SET status = :status, {STEP_COLUMN[target]} = :at, "
+            f"{RECORDED_COLUMN[target]} = :recorded, executor_id = :e, executor_name = :n, "
+            "work_done = COALESCE(:work, work_done) WHERE id = :id"
         ),
         {
             "id": request["id"],
             "status": target,
             "at": at,
+            "recorded": now,
             "e": executor["id"],
             "n": executor["name"],
             "work": work_done.strip() if work_done else None,
         },
     )
-    await _history(session, request["id"], target, executor["id"], user_id, user_name, comment, at)
+    await _history(session, request["id"], target, executor["id"], user_id, user_name, comment, at, now)
     if target == "done":
         assert work_done is not None
         await records.add_repair(

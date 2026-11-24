@@ -270,8 +270,8 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | `downtime_annotations` | id, machine_id, start_ts, end_ts, reason_id, comment, operator, created_at |
 | `scrap_records` | id, machine_id, ts, program, qty, reason_id, operator |
 | `operator_setup_marks` | id, machine_id, start_ts, end_ts, operator (ручная отметка «наладка») |
-| `repair_requests` | id, machine_id, status, description, alarm_ts + alarm_code (авария, из которой открыта), failure_ts, исполнитель, моменты шагов, work_done, voided_at + void_reason |
-| `repair_request_history` | request_id, ts, action, executor_id, user_name, comment |
+| `repair_requests` | id, machine_id, status, description, alarm_ts + alarm_code (авария, из которой открыта), failure_ts, исполнитель, моменты шагов (указанный и записи в систему), work_done, voided_at + void_reason |
+| `repair_request_history` | request_id, ts (указанный момент), recorded_at (момент записи), action, executor_id, user_name, comment |
 | `repair_records` | id, machine_id, completed_at, description, engineer, request_id (null — ремонт вне системы), voided_at + void_reason |
 | `maintenance_plans`, `maintenance_records` | регламент «каждые N часов RUN» станка; отметки о выполнении (аннулируются с причиной) |
 
@@ -364,7 +364,8 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 - **Заявка на ремонт** — из аварии журнала одной кнопкой (ссылка на аварию по времени и коду, одна заявка на
   аварию) или вручную с моментом отказа. Статусы строго `новая → принята → в работе → выполнена`; принятие
   назначает исполнителя с ролью `service`, его можно сменить до выполнения. История действий —
-  `repair_request_history`. Выполнение создаёт запись в журнале ремонтов со ссылкой на заявку; ручной ввод
+  `repair_request_history`. Шаг хранит указанное время и момент записи в систему; шаг, внесённый задним
+  числом больше чем на 30 минут, клиент видит с пометкой «время указано задним числом». Выполнение создаёт запись в журнале ремонтов со ссылкой на заявку; ручной ввод
   ремонтов вне системы остаётся. Ошибочную заявку аннулируют с причиной: клиент — пока она новая, сервис —
   до выполнения.
 - **Время реакции и восстановления** вычисляются при чтении по таймлайну: реакция — от отказа до начала работ,
