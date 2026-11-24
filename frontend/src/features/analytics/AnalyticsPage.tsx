@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, query, type Interval, type Machine, type OeeRow, type ParetoRow, type Shift } from "../../api/client";
 import { Chart } from "../../shared/Chart";
+import { CyclesCard } from "./CyclesCard";
 import { t } from "../../shared/i18n";
 import { NodePicker, useMe, useNodeSelection } from "../../shared/session";
 import { formatDuration, formatTime, percent, STATE_COLORS, STATE_ORDER, stateColor, stateLabel } from "../../shared/states";
@@ -225,6 +226,8 @@ export function AnalyticsPage() {
         </div>
         <Chart option={ganttOption} height={90 + shown.length * 44} />
       </Card>
+
+      <CyclesCard siteId={siteId} areaId={areaId} />
 
       <Card title={t.analytics.oeeByMachine}>
         <table className="w-full text-sm">

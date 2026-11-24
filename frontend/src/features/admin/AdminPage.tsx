@@ -8,7 +8,8 @@ import { TokensPanel } from "./TokensPanel";
 import { UsersPanel } from "./UsersPanel";
 
 type Row = Record<string, any>;
-type ColumnType = "text" | "number" | "bool" | "select" | "json" | "readonly";
+// "minutes": stored in seconds, shown in minutes; empty = null (automatic)
+type ColumnType = "text" | "number" | "minutes" | "bool" | "select" | "json" | "readonly";
 interface Column {
   key: string;
   label: string;
@@ -59,6 +60,7 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
           { key: "area_id", label: c.area, type: "select", options: areaOptions },
           { key: "controller_type", label: c.controller, type: "text" },
           { key: "sort_order", label: c.order, type: "number" },
+          { key: "cycle_pause_threshold_s", label: c.pauseThreshold, type: "minutes" },
           { key: "is_active", label: c.active, type: "bool" },
         ],
       },
@@ -179,12 +181,15 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
   return tabs;
 }
 
+const c_auto = t.admin.col.auto;
+
 function Cell({ column, value, editing, onChange }: { column: Column; value: any; editing: boolean; onChange: (v: any) => void }) {
   if (!editing || column.type === "readonly") {
     if (column.type === "bool") return <>{value ? t.common.yes : t.common.no}</>;
     if (column.type === "select") return <>{column.options?.find((o) => o.value === value)?.label ?? value ?? "—"}</>;
     if (column.type === "json") return <code className="text-xs">{JSON.stringify(value)}</code>;
     if (column.key === "valid_from" && value) return <>{new Date(value).toLocaleString("ru-RU")}</>;
+    if (column.type === "minutes") return <>{value == null ? c_auto : (value / 60).toLocaleString("ru-RU")}</>;
     if (column.key === "color") {
       return (
         <span className="flex items-center gap-2">
@@ -196,6 +201,18 @@ function Cell({ column, value, editing, onChange }: { column: Column; value: any
     return <>{value ?? "—"}</>;
   }
   if (column.type === "bool") return <input type="checkbox" className="h-5 w-5" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />;
+  if (column.type === "minutes") {
+    return (
+      <input
+        className={`${inputClass} w-full`}
+        type="number"
+        min={1}
+        placeholder={c_auto}
+        value={value == null ? "" : value / 60}
+        onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value) * 60)}
+      />
+    );
+  }
   if (column.type === "select") {
     return (
       <select
