@@ -100,23 +100,29 @@ class MachineDriver(Protocol):
 Реализации: `FanucFocasDriver`, `SimulatorDriver`; позже `OpcUaDriver`, `MTConnectDriver`, `SiemensDriver`.
 
 ### 3.5. Сигналы Fanuc 0i-MD (FOCAS2)
-| Сигнал | Функция FOCAS | Период |
+Система по отношению к стойке **только читает**: функций записи в ЧПУ (`cnc_wr*`, `pmc_wr*`, загрузка и
+удаление программ) нет ни в коллекторе, ни в пробе. Пока не измерено, как стойка переносит опрос, коллектор
+читает минимум (ADR 0007); набор — `signals` в конфиге станка.
+
+| Сигнал (`signals`) | Функция FOCAS | Когда читается |
 |---|---|---|
 | Подключение | `cnc_allclibhndl3(ip, 8193, timeout)` / `cnc_freelibhndl` | — |
-| Статус (aut, run, motion, mstb, emergency, alarm, edit) | `cnc_statinfo` | 1 с |
-| Номер программы (основная / выполняемая) | `cnc_rdprgnum` | 1 с |
-| Имя программы | `cnc_exeprgname` (если поддерживается) | 1 с |
-| Фактическая подача | `cnc_actf` | 1 с |
-| Фактические обороты шпинделя | `cnc_acts` | 1 с |
-| Нагрузка шпинделя | `cnc_rdspmeter` / `cnc_rdspload` | 1 с |
-| Счётчик деталей | `cnc_rdmacro(#3901)` или `cnc_rdparam(6711)` — настраивается | 1 с |
-| Аварии | `cnc_rdalmmsg2` | при `alarm != 0` |
-| Overrides подачи/шпинделя | `pmc_rdpmcrng` (адреса G-сигналов задаются в конфиге) | 1 с, опционально |
+| `status`: aut, run, motion, mstb, emergency, alarm, edit | `cnc_statinfo` | всегда, каждый опрос |
+| `program`: номер (основная / выполняемая) и имя | `cnc_rdprgnum`, `cnc_exeprgname` (если поддерживается) | по умолчанию |
+| `part_count`: счётчик деталей | `cnc_rdmacro(#3901)` или `cnc_rdparam(6711)` — настраивается | по умолчанию |
+| `alarms`: аварии | `cnc_rdalmmsg2` | по умолчанию, только при `alarm != 0` |
+| `feed_actual`: фактическая подача | `cnc_actf` | только если включён явно |
+| `spindle_speed`: фактические обороты | `cnc_acts` | только если включён явно |
+| `spindle_load`: нагрузка шпинделя | `cnc_rdspmeter` | только если включён явно |
+
+Период опроса — 1 с по умолчанию, допускается 2–5 с. Коррекции (`pmc_rdpmcrng` G0012/G0030/G0014),
+инструмент (#4120), таймеры (`cnc_rdtimer`), нагрузки осей (`cnc_rdsvmeter`), `cnc_rddynamic2` коллектор
+не читает: их один раз смотрит разведка пробы `--recon` (`docs/runbooks/first-machine.md`).
 
 Требования к стойке: встроенный Ethernet, FOCAS2 включён, порт 8193 доступен из сети коллектора. **Этап 0 проекта — проверить всё это скриптом `focas_probe.py` на реальной стойке.**
 
 ### 3.6. Поведение
-- Один поток на станок; общий publisher.
+- Один поток на станок; общий publisher. Публикуются только поля настроенных сигналов.
 - Ошибка FOCAS → переподключение с экспоненциальной задержкой (1 → 30 с); публикуется событие `connection: lost/restored`.
 - Публикация телеметрии: **по изменению + не реже 1 раза в 10 с** (keyframe). Счётчик деталей и статус — всегда при изменении.
 - Буфер SQLite: каждое сообщение пишется в буфер до отправки; удаляется после PUBACK. Срок хранения — **не дольше 7 дней** (`buffer.max_age_days`, значения больше 7 конфиг не принимает); более старые сообщения вытесняются.
@@ -145,8 +151,9 @@ machines:
     driver: fanuc_focas
     ip: 192.168.10.57
     port: 8193
-    poll_interval_ms: 1000
+    poll_interval_ms: 1000            # 1000 по умолчанию, допускается 2000–5000
     part_counter: { source: macro, address: 3901 }
+    signals: [status, program, part_count, alarms]   # минимум (по умолчанию)
   - id: sim01
     driver: simulator
     profile: milling_normal
@@ -527,7 +534,7 @@ machine-monitor/
 │   └── mosquitto/
 └── docs/
     ├── adr/                  # архитектурные решения
-    └── runbooks/             # быстрый старт, сеть коллектора
+    └── runbooks/             # быстрый старт, сеть коллектора, первая стойка
 ```
 
 ---

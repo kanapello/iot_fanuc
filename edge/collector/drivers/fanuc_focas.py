@@ -1,7 +1,12 @@
 """Fanuc FOCAS2 driver (ctypes over Fwlib), 0i-D / 30i structure layouts.
 
 Derived from tools/focas_probe.py. NOT yet verified on a real control.
-One driver instance = one FOCAS handle = one thread.
+One driver instance = one FOCAS handle = one thread. The driver only reads: it has no
+function that writes into the CNC.
+
+Only the configured signals are read (ADR 0007): by default the status, the program,
+the part counter and, while the status shows an alarm, the alarm list. Feed, spindle
+speed and spindle load cost extra calls and are read only when enabled explicitly.
 
 Fwlib64.dll loads its companions (fwlibe64.dll, fwlib0iD64.dll) by bare name when
 it connects, through the classic DLL search (PATH) that ``os.add_dll_directory``
@@ -16,10 +21,11 @@ import ctypes
 import logging
 import os
 import threading
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from collector.config import PartCounterConfig
+from collector.config import MINIMAL_SIGNALS, PartCounterConfig
 from collector.drivers.base import Alarm, DriverConnectionError, DriverError, MachineSnapshot
 
 log = logging.getLogger(__name__)
@@ -172,8 +178,10 @@ class FanucFocasDriver:
         port: int = 8193,
         part_counter: PartCounterConfig | None = None,
         timeout_s: int = 10,
+        signals: Collection[str] = MINIMAL_SIGNALS,
     ) -> None:
         self._lib = load_library(library_path)
+        self._signals = frozenset(signals)
         self._ip = ip
         self._port = port
         self._timeout_s = timeout_s
@@ -262,13 +270,21 @@ class FanucFocasDriver:
         )
         return int(param.ldata)
 
+    def _program_number(self) -> str:
+        program = ODBPRO()
+        self._call("cnc_rdprgnum", ctypes.byref(program))
+        return f"O{int(program.data):04d}"
+
+    def _wanted(self, signal: str, reader: Any) -> Any:
+        """Read a configured signal; a signal that is not configured costs no call."""
+        return self._optional(signal, reader) if signal in self._signals else None
+
     def read_snapshot(self) -> MachineSnapshot:
         stat = ODBST()
         self._call("cnc_statinfo", ctypes.byref(stat))
-        program = ODBPRO()
-        self._call("cnc_rdprgnum", ctypes.byref(program))
         aut, run, alarm, emergency = int(stat.aut), int(stat.run), int(stat.alarm), int(stat.emergency)
-        program_number = f"O{int(program.data):04d}"
+        program_number = self._program_number() if "program" in self._signals else None
+        program_name = self._optional("program_name", self._program_name) if program_number else None
         return MachineSnapshot(
             mode=AUT_MODES.get(aut, f"AUT{aut}"),
             aut_code=aut,
@@ -280,11 +296,11 @@ class FanucFocasDriver:
             emergency_code=emergency,
             emergency=emergency == 1,
             program=program_number,
-            program_name=self._optional("program_name", self._program_name) or program_number,
-            feed_actual=self._optional("feed_actual", lambda: self._actual("cnc_actf")),
-            spindle_speed=self._optional("spindle_speed", lambda: self._actual("cnc_acts")),
-            spindle_load=self._optional("spindle_load", self._spindle_load),
-            part_count=self._optional("part_count", self._part_count),
+            program_name=program_name or program_number,
+            feed_actual=self._wanted("feed_actual", lambda: self._actual("cnc_actf")),
+            spindle_speed=self._wanted("spindle_speed", lambda: self._actual("cnc_acts")),
+            spindle_load=self._wanted("spindle_load", self._spindle_load),
+            part_count=self._wanted("part_count", self._part_count),
         )
 
     def read_alarms(self) -> list[Alarm]:

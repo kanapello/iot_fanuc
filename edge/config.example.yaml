@@ -10,17 +10,20 @@ mqtt:
   password_env: MM_MQTT_PASSWORD   # the password itself is taken from this environment variable
 focas:
   library_path: ./vendor/Fwlib64.dll
-buffer:                            # store-and-forward buffer (used from stage 2)
+buffer:                            # store-and-forward buffer
   path: ./data/buffer.db
   max_age_days: 7
 machines:
   - id: m07
     name: "Фрезерный 07"
-    driver: fanuc_focas            # FOCAS driver is delivered in stage 2
+    driver: fanuc_focas
     ip: 192.168.10.57
     port: 8193
-    poll_interval_ms: 1000
+    poll_interval_ms: 1000         # 1000 by default; 2000-5000 if the control answers slowly
     part_counter: { source: macro, address: 3901 }
+    # What is read. The minimum (default) is enough for the timeline and OEE. Add feed_actual,
+    # spindle_speed, spindle_load only after `focas_probe.py --recon` and timing on this control.
+    signals: [status, program, part_count, alarms]
   - id: sim01
     driver: simulator
     profile: milling_normal

@@ -6,9 +6,14 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
+
+# What the collector reads from a machine. The minimum keeps the timeline and OEE working;
+# feed, spindle speed and spindle load are read only when listed explicitly (ADR 0007).
+Signal = Literal["status", "program", "part_count", "alarms", "feed_actual", "spindle_speed", "spindle_load"]
+MINIMAL_SIGNALS: tuple[Signal, ...] = ("status", "program", "part_count", "alarms")
 
 
 class _Model(BaseModel):
@@ -46,12 +51,22 @@ class _MachineBase(_Model):
     id: Identifier
     name: str | None = None
     poll_interval_ms: int = Field(default=1000, ge=100)
+    signals: list[Signal] = Field(default_factory=lambda: list(MINIMAL_SIGNALS))
+
+    @field_validator("signals")
+    @classmethod
+    def _status_is_always_read(cls, value: list[Signal]) -> list[Signal]:
+        if "status" not in value:
+            raise ValueError("'status' (cnc_statinfo) is always read: the timeline depends on it")
+        return list(dict.fromkeys(value))
 
 
 class FanucFocasMachine(_MachineBase):
     driver: Literal["fanuc_focas"]
     ip: str
     port: int = 8193
+    # 1 s by default; 2-5 s for a control that answers slowly. Faster is not allowed.
+    poll_interval_ms: int = Field(default=1000, ge=1000, le=5000)
     part_counter: PartCounterConfig = PartCounterConfig()
 
 

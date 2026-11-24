@@ -46,7 +46,9 @@ def build_driver(config: CollectorConfig, machine: MachineConfig, clock: LaggedC
             raise ValueError("config section 'focas.library_path' is required for fanuc_focas machines")
         from collector.drivers.fanuc_focas import FanucFocasDriver
 
-        return FanucFocasDriver(config.focas.library_path, machine.ip, machine.port, machine.part_counter)
+        return FanucFocasDriver(
+            config.focas.library_path, machine.ip, machine.port, machine.part_counter, signals=machine.signals
+        )
     scenario = load_scenario(machine.profile, config.scenarios_dir)
     return SimulatorDriver(
         scenario, offset_s=machine.offset_s, time_scale=machine.time_scale, clock=clock.wall, anchor=0.0
@@ -108,6 +110,7 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
             publisher,
             poll_interval_s=machine.poll_interval_ms / 1000,
             keyframe_interval_s=config.keyframe_interval_s,
+            signals=machine.signals,
             now=clock.now,
             monotonic=clock.monotonic,
         )

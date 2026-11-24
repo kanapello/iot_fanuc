@@ -209,7 +209,8 @@ async def test_edge_to_oee(
             await wait_until(lambda: not collector.publisher.connected, what="collector noticed the outage")
             await collector.run(300, 900)  # ten simulated minutes with no broker
             buffered = collector.buffer.size()
-            assert buffered > 200, "messages must pile up in the SQLite buffer"
+            # the default (minimal) signals change less often: at least a keyframe every 10 s piles up
+            assert buffered >= 50, "messages must pile up in the SQLite buffer"
 
             if disturbance == "collector_restart_with_full_buffer":
                 collector.shutdown()  # process restart: only the buffer file survives

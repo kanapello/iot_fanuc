@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import Any
 
-from collector.drivers.base import Alarm, DriverConnectionError, DriverError, MachineDriver
+from collector.config import MINIMAL_SIGNALS
+from collector.drivers.base import Alarm, DriverConnectionError, DriverError, MachineDriver, published_fields
 from collector.messages import MessageFactory
 from collector.publisher import Publisher
 
@@ -28,7 +29,8 @@ class MachinePoller:
 
     No business logic: telemetry is published on change and at least once per
     ``keyframe_interval_s``; events only mirror raw transitions (alarm list,
-    connection, program number).
+    connection, program number). Only the configured signals are published, and
+    the alarm list is read only if alarms are configured and the status shows one.
     """
 
     def __init__(
@@ -40,6 +42,7 @@ class MachinePoller:
         *,
         poll_interval_s: float = 1.0,
         keyframe_interval_s: float = 10.0,
+        signals: Collection[str] = MINIMAL_SIGNALS,
         now: Callable[[], datetime] = _utcnow,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -48,6 +51,8 @@ class MachinePoller:
         self._factory = factory
         self._publisher = publisher
         self._poll_interval_s = poll_interval_s
+        self._fields = published_fields(signals)
+        self._read_alarms = "alarms" in signals
         self._keyframe_interval_s = keyframe_interval_s
         self._now = now
         self._monotonic = monotonic
@@ -84,7 +89,7 @@ class MachinePoller:
         try:
             snapshot = self._driver.read_snapshot()
             ts = self._now()
-            alarms = self._driver.read_alarms() if snapshot.alarm else []
+            alarms = self._driver.read_alarms() if snapshot.alarm and self._read_alarms else []
         except DriverConnectionError as exc:
             self._on_connection_lost(exc)
             return
@@ -92,7 +97,8 @@ class MachinePoller:
             log.warning("%s: read failed: %s", self.machine_id, exc)
             return
 
-        self._publish_telemetry(snapshot.to_data(), ts)
+        data = {k: v for k, v in snapshot.to_data().items() if k in self._fields}
+        self._publish_telemetry(data, ts)
         self._publish_alarm_changes(alarms, ts)
         if snapshot.program is not None:
             if self._last_program is not None and snapshot.program != self._last_program:
