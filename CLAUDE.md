@@ -20,38 +20,44 @@
 6. **Контракт сообщений** — только через `shared/schemas/*.json`. Изменение формата = новая версия схемы (`telemetry.v2`), старая поддерживается до миграции всех коллекторов.
 7. **Аннотации пользователей привязаны ко времени**, не к id интервалов.
 8. **Миграции БД только через Alembic.** Никаких ручных DDL.
-9. **Модули backend изолированы:** `ingest`, `timeline`, `oee`, `reports`, `notify`, `api`, `admin` общаются через сервисные функции/интерфейсы, а не лезут в таблицы друг друга напрямую. Общее — только в `core`.
+9. **Модули backend изолированы:** `ingest`, `timeline`, `oee`, `reports`, `geometry`, `repairs`, `api`, `admin` (и будущий `notify`) общаются через сервисные функции/интерфейсы, а не лезут в таблицы друг друга напрямую. Общее — только в `core`.
 10. **Библиотеки FOCAS (Fwlib*.dll, libfwlib32.so) не коммитить** — только `edge/vendor/` в `.gitignore`.
 11. Секреты — только через переменные окружения / `.env` (в git — `.env.example`).
 
 ## Стек и инструменты
 
 - Python 3.12, менеджер `uv`. Backend: FastAPI, SQLAlchemy 2 async, asyncpg, Alembic, pydantic v2, aiomqtt, redis-py.
-- Edge: Python 3.12, ctypes, paho-mqtt, SQLite, pydantic; упаковка PyInstaller (Windows), Docker (Linux).
-- Frontend: React 18 + TypeScript + Vite, pnpm, TanStack Query/Router, Tailwind, ECharts. API-клиент генерируется из OpenAPI (`make gen-client`), руками не пишется.
+- Edge: Python 3.12, ctypes, paho-mqtt, SQLite, pydantic; образ Docker (Linux). Сборка `.exe` для Windows (PyInstaller) пока не сделана.
+- Frontend: React 18 + TypeScript + Vite, pnpm, TanStack Query, react-router-dom, Tailwind, ECharts. API-клиент пока написан вручную (`frontend/src/api/client.ts`): генерация из OpenAPI — когда у маршрутов появятся модели ответов.
 - БД: PostgreSQL 16 + TimescaleDB. Кэш/live: Redis 7. Брокер: Mosquitto 2.
-- Качество: `ruff` (lint+format), `mypy --strict` для `backend/app` и `edge/collector`, `pytest`, `testcontainers` для интеграционных тестов, `vitest`, `eslint`, `prettier`.
+- Качество: `ruff` (lint+format), `mypy --strict` для `backend/app` и `edge/collector`, `pytest`, `testcontainers` для интеграционных тестов; фронтенд — проверка типов `tsc` и сборка. Модульных и e2e-тестов фронтенда, линтера JS и pre-commit пока нет — не ссылаться на них, пока не добавлены.
+- CI — GitHub Actions (`.github/workflows/ci.yml`): backend (ruff, mypy, pytest), edge (ruff, mypy, pytest), frontend (сборка), сборка Docker-образов. Pull request сливается в `main` только с зелёными проверками.
 
-## Команды (Makefile — создать на этапе 1 и поддерживать)
+## Команды (Makefile — поддерживать)
 
 ```
 make up            # docker compose up -d (сервер) + профиль dev (симулятор)
-make down
+make down          # остановить, тома сохраняются
+make clean         # остановить и УДАЛИТЬ тома
 make logs s=api    # логи сервиса
+make ps
 make migrate       # alembic upgrade head
-make test          # все тесты backend + edge + frontend
-make lint          # ruff, mypy, eslint
-make gen-client    # OpenAPI -> TS-клиент
-make recalc m=<machine_id> from=<iso> to=<iso>   # пересчёт таймлайна и OEE
-make edge-build-win   # сборка коллектора .exe (выполняется на Windows)
+make psql
+make test          # все тесты backend + edge + frontend (frontend — проверка типов)
+make lint          # ruff, mypy, tsc
+make format        # ruff format + ruff check --fix
+make recalc from=<iso> [to=<iso>] [m=<machine_id>]   # пересчёт таймлайна и OEE
 ```
+
+`make gen-client` (OpenAPI → TS-клиент) и `make edge-build-win` (сборка `.exe` коллектора на Windows)
+появятся вместе с генерацией клиента и сборкой под Windows.
 
 ## Тестирование
 
-- **Симулятор — основной инструмент проверки.** `edge/collector/drivers/simulator.py` поддерживает сценарии (YAML в `edge/scenarios/`): нормальная работа, частые простои, авария, обрыв связи, сброс счётчика деталей, смена программы, опоздавшие данные из буфера.
+- **Симулятор — основной инструмент проверки.** `edge/collector/drivers/simulator.py` поддерживает сценарии (YAML в `edge/scenarios/`): нормальная работа, частые простои, авария, обрыв связи, сброс счётчика деталей, смена программы. Опоздавшие данные из буфера проверяются тестами буфера edge и сквозными тестами backend (перезапуск коллектора с непустым буфером).
 - Для таймлайна и OEE — **golden-тесты**: сценарий → ожидаемые интервалы и метрики (`backend/tests/golden/`). Любое изменение правил/формул должно проходить golden-тесты или явно обновлять эталоны с объяснением.
 - Интеграционные тесты на реальном PostgreSQL+TimescaleDB через testcontainers, без моков БД.
-- Перед завершением этапа: `make lint && make test` зелёные, `make up` поднимается с нуля на чистых томах.
+- Перед завершением этапа: `make lint && make test` зелёные, `make up` поднимается с нуля на чистых томах, CI на pull request зелёный.
 
 ## Edge-коллектор: важные детали
 
@@ -75,6 +81,7 @@ make edge-build-win   # сборка коллектора .exe (выполняе
 ## Git
 
 - Небольшие коммиты по смыслу, Conventional Commits (`feat(ingest): ...`, `fix(edge): ...`).
+- Каждая задача — своя ветка и pull request; слияние — merge commit (не squash), только при зелёных `make lint`, `make test` и CI.
 - Не коммитить: `.env`, `edge/vendor/`, `edge/data/`, тома docker, сборки.
 
 ## Старт проекта

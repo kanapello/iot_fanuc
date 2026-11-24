@@ -4,15 +4,17 @@
 
 Платформа мониторинга станков (Fanuc 0i-MD и др.) и расчёта OEE — сервис для многих
 предприятий-клиентов: одна установка, данные клиентов разделены по организациям, сотрудники
-сервисной компании видят станки всех клиентов. Сейчас работает сквозной каркас на симуляторе.
+сервисной компании видят станки всех клиентов. Версия 0.4.0: вся цепочка работает на симуляторе;
+на реальной стойке проба FOCAS ждёт проверки после исправления загрузки DLL.
 
 - Архитектура и этапы: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Что сейчас и что ждёт решения: [NOW.md](NOW.md); изменения по версиям: [CHANGELOG.md](CHANGELOG.md)
 - Правила разработки: [CLAUDE.md](CLAUDE.md)
 - Что сделано в каркасе, что упрощено: [docs/skeleton-report.md](docs/skeleton-report.md)
 - Укрепление ядра данных: [docs/harden-core-report.md](docs/harden-core-report.md)
 - Организации, площадки и роли: [docs/tenancy-roles-report.md](docs/tenancy-roles-report.md)
 - Геометрическая точность — архив сервиса: [docs/geometry-report.md](docs/geometry-report.md)
-- Текущий план работ: [NOW.md](NOW.md)
+- Ремонт и обслуживание: [docs/service-repairs-report.md](docs/service-repairs-report.md)
 - Быстрый старт и команды: [docs/runbooks/dev-quickstart.md](docs/runbooks/dev-quickstart.md)
 
 ## Запуск

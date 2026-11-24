@@ -11,7 +11,7 @@ from collector.buffer import Buffer
 from collector.messages import heartbeat
 from collector.publisher import Publisher
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 HEARTBEAT_INTERVAL_S = 15.0
 
 
