@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,6 +63,22 @@ def test_focas_driver_against_fake_library(tmp_path: Path) -> None:
 
     with pytest.raises(DriverConnectionError):
         FanucFocasDriver(str(lib), "10.9.9.9").connect()
+
+
+def test_focas_driver_puts_the_library_folder_first_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fwlib64.dll loads fwlibe64.dll / fwlib0iD64.dll by bare name: their folder must be first on PATH."""
+    from collector.drivers import fanuc_focas
+
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", str(tmp_path), "/bin"]))
+    fanuc_focas.prepare_dll_search(tmp_path)
+    fanuc_focas.prepare_dll_search(tmp_path)
+    assert os.environ["PATH"].split(os.pathsep) == [str(tmp_path), "/usr/bin", "/bin"]
+    calls: list[str] = []
+    monkeypatch.setattr(fanuc_focas, "WINDOWS", True)
+    monkeypatch.setattr(fanuc_focas, "_set_dll_directory", calls.append)
+    fanuc_focas.prepare_dll_search(tmp_path / "vendor")
+    assert calls == [str(tmp_path / "vendor")]
+    assert os.environ["PATH"].split(os.pathsep)[:2] == [str(tmp_path / "vendor"), str(tmp_path)]
 
 
 def test_buffer_age_is_limited_to_seven_days() -> None:

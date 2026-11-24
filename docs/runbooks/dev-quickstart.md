@@ -76,11 +76,14 @@ COMPOSE_EXTRA="-f compose.ca.yml" make up
 ## Проверка стойки (этап 0)
 
 ```bash
-python edge/tools/focas_probe.py --ip 192.168.10.57 --port 8193 --lib edge/vendor/Fwlib64.dll --watch
+python edge/tools/focas_probe.py --ip 192.168.10.57 --port 8193 --lib edge/vendor/Fwlib64.dll --out probe.txt
 ```
 
-Библиотеку FOCAS положить в `edge/vendor/` вручную (в git не хранится). Разрядность
-Python должна совпадать с разрядностью библиотеки.
+Библиотеку FOCAS положить в `edge/vendor/` вручную (в git не хранится) — `Fwlib64.dll` вместе с
+`fwlibe64.dll` и `fwlib0iD64.dll` в одной папке. Разрядность Python должна совпадать с разрядностью
+библиотеки. Проба сама ставит эту папку первой в `PATH` (на Windows — ещё `SetDllDirectoryW`):
+вспомогательные DLL грузятся по имени, `os.add_dll_directory` для них не работает (`EW_NODLL`).
+`--out` дописывает вывод в файл UTF-8, `--watch` — опрос раз в секунду.
 
 ## Подключение реального коллектора
 

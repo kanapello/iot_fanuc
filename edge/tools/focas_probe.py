@@ -6,9 +6,17 @@ to a shop-floor PC and run
 
     python focas_probe.py --ip 192.168.10.57 --port 8193 --lib ./vendor/Fwlib64.dll
 
-It connects to the control and prints the status word (decoded), program
-number/name, actual feed, spindle speed and load, macro #3901, parameter 6711
-and the active alarms. ``--watch`` repeats the readout once per second.
+It connects to the control and prints the system info (series, software
+version, axes), the status word (decoded), program number/name, actual feed,
+spindle speed and load, macro #3901, parameter 6711 and the active alarms,
+with the response time of every call. ``--watch`` repeats the readout once per
+second; ``--out probe.txt`` also appends everything to a UTF-8 file.
+
+Fwlib64.dll loads its companions (fwlibe64.dll, fwlib0iD64.dll) by bare name
+when it connects. That lookup follows the classic DLL search (PATH), which
+``os.add_dll_directory`` does not change: on a live control it ended in
+EW_NODLL. So the folder of the library is put first on PATH of the process
+(and made the DLL directory with SetDllDirectoryW on Windows) before loading.
 
 Structure layouts follow fwlib32.h for the 0i-D / 30i family. Python bitness
 must match the library bitness (Fwlib64.dll -> 64-bit Python,
@@ -123,11 +131,24 @@ ALARM_TYPES = {
 
 MAX_ALARMS = 10
 MAX_SPINDLES = 4
+WINDOWS = os.name == "nt"
 
 
 class _Struct(ctypes.Structure):
     # fwlib32.h is compiled with #pragma pack(4) on Windows.
     _pack_ = 4
+
+
+class ODBSYS(_Struct):
+    _fields_ = [
+        ("addinfo", ctypes.c_short),
+        ("max_axis", ctypes.c_short),
+        ("cnc_type", ctypes.c_char * 2),
+        ("mt_type", ctypes.c_char * 2),
+        ("series", ctypes.c_char * 4),
+        ("version", ctypes.c_char * 4),
+        ("axes", ctypes.c_char * 2),
+    ]
 
 
 class ODBST(_Struct):
@@ -241,6 +262,33 @@ def _decode(raw: bytes) -> str:
     return text.decode("latin-1", errors="replace").strip()
 
 
+def _set_dll_directory(folder: str) -> None:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
+    func = kernel32.SetDllDirectoryW
+    func.argtypes = [ctypes.c_wchar_p]
+    func.restype = ctypes.c_int
+    if not func(folder):
+        error = ctypes.get_last_error()  # type: ignore[attr-defined,unused-ignore]
+        print(f"ПРЕДУПРЕЖДЕНИЕ: SetDllDirectoryW({folder}) не сработал, код {error}", file=sys.stderr)
+
+
+def prepare_dll_search(folder: Path) -> None:
+    """Let Fwlib find its companion libraries (fwlibe64.dll, fwlib0iD64.dll) by bare name.
+
+    They are loaded at connection time through the classic DLL search order, which
+    ``os.add_dll_directory`` does not affect. The folder goes first on PATH of this
+    process (once), and on Windows it also becomes the DLL directory.
+    """
+    entry = str(folder)
+    same = os.path.normcase(os.path.normpath(entry))
+    rest = [
+        p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.normcase(os.path.normpath(p)) != same
+    ]
+    os.environ["PATH"] = os.pathsep.join([entry, *rest])
+    if WINDOWS:
+        _set_dll_directory(entry)
+
+
 def load_library(path: str) -> Any:
     lib_path = Path(path).expanduser().resolve()
     if not lib_path.is_file():
@@ -249,10 +297,9 @@ def load_library(path: str) -> Any:
             "Положите Fwlib64.dll / Fwlib32.dll / libfwlib32.so в edge/vendor/ "
             "(в репозитории не хранится — лицензия Fanuc) и укажите путь через --lib."
         )
+    prepare_dll_search(lib_path.parent)
     try:
-        if os.name == "nt":
-            # Fwlib loads its companion DLLs (fwlibe*.dll, fwlib0iD*.dll) from its own directory.
-            os.add_dll_directory(str(lib_path.parent))
+        if WINDOWS:
             return ctypes.WinDLL(str(lib_path))  # type: ignore[attr-defined,unused-ignore]
         return ctypes.CDLL(str(lib_path))
     except OSError as exc:
@@ -271,6 +318,14 @@ class FocasProbe:
     lib: Any
     handle: ctypes.c_ushort = field(default_factory=lambda: ctypes.c_ushort(0))
     connected: bool = False
+    last_ms: float | None = None  # response time of the last FOCAS call, ms
+
+    def _timed(self, func: Any, *args: Any) -> int:
+        started = time.perf_counter()
+        try:
+            return int(func(*args))
+        finally:
+            self.last_ms = (time.perf_counter() - started) * 1000
 
     def startup(self, log_path: str) -> None:
         """Linux libraries require cnc_startupprocess before the first connection."""
@@ -296,7 +351,8 @@ class FocasProbe:
             ctypes.c_int32,
             ctypes.POINTER(ctypes.c_ushort),
         ]
-        self._check("cnc_allclibhndl3", func(ip.encode("ascii"), port, timeout_s, ctypes.byref(self.handle)))
+        code = self._timed(func, ip.encode("ascii"), port, timeout_s, ctypes.byref(self.handle))
+        self._check("cnc_allclibhndl3", code)
         self.connected = True
 
     def disconnect(self) -> None:
@@ -316,7 +372,20 @@ class FocasProbe:
     def _call(self, name: str, *args: Any) -> None:
         func = getattr(self.lib, name)
         func.restype = ctypes.c_short
-        self._check(name, func(self.handle, *args))
+        self._check(name, self._timed(func, self.handle, *args))
+
+    def sysinfo(self) -> dict[str, Any]:
+        buf = ODBSYS()
+        self._call("cnc_sysinfo", ctypes.byref(buf))
+        return {
+            "addinfo": int(buf.addinfo),
+            "max_axis": int(buf.max_axis),
+            "cnc_type": _decode(bytes(buf.cnc_type)),
+            "mt_type": _decode(bytes(buf.mt_type)),
+            "series": _decode(bytes(buf.series)),
+            "version": _decode(bytes(buf.version)),
+            "axes": _decode(bytes(buf.axes)),
+        }
 
     def statinfo(self) -> dict[str, int]:
         buf = ODBST()
@@ -395,6 +464,36 @@ def _label(table: dict[int, str], value: int) -> str:
     return f"{table.get(value, '?')} [{value}]"
 
 
+def format_sysinfo(info: dict[str, Any]) -> list[str]:
+    i_series = "i" if info["addinfo"] & 0x2 else ""  # bit 1 of addinfo: an i series control
+    model = f"{info['cnc_type']}{i_series}-{info['mt_type']}".strip("-")
+    axes = info["axes"].lstrip("0") or info["axes"]
+    return [
+        f"  модель ЧПУ         : {model} (cnc_type {info['cnc_type']!r}, mt_type {info['mt_type']!r})",
+        f"  серия ПО           : {info['series']}",
+        f"  версия ПО          : {info['version']}",
+        f"  управляемых осей   : {axes} (максимум {info['max_axis']})",
+        f"  addinfo            : 0x{info['addinfo'] & 0xFFFF:04x}",
+    ]
+
+
+def _with_time(probe: FocasProbe, line: str) -> str:
+    return line if probe.last_ms is None else f"{line}  [{probe.last_ms:.1f} мс]"
+
+
+def read_system(probe: FocasProbe) -> list[str]:
+    """Series, software version and axes: read once after connecting."""
+    probe.last_ms = None
+    try:
+        info = probe.sysinfo()
+    except FocasError as exc:
+        if exc.connection_lost:
+            raise
+        note = "сигнал не поддерживается стойкой" if exc.unsupported else "ошибка чтения"
+        return [_with_time(probe, f"Система (cnc_sysinfo): {note} — {exc}")]
+    return [_with_time(probe, "Система (cnc_sysinfo):"), *format_sysinfo(info)]
+
+
 def format_statinfo(stat: dict[str, int]) -> list[str]:
     return [
         f"  режим (aut)        : {_label(AUT_MODES, stat['aut'])}",
@@ -417,13 +516,18 @@ def read_report(probe: FocasProbe) -> list[str]:
     alarm_active = True  # if statinfo fails, still try to read alarms
 
     def section(title: str, reader: Any) -> None:
+        """One signal; its first line gets the response time of the FOCAS call."""
+        probe.last_ms = None
         try:
-            lines.extend(reader())
+            part = reader()
         except FocasError as exc:
             if exc.connection_lost:
                 raise
             note = "сигнал не поддерживается стойкой" if exc.unsupported else "ошибка чтения"
-            lines.append(f"{title}: {note} — {exc}")
+            part = [f"{title}: {note} — {exc}"]
+        if part:
+            part[0] = _with_time(probe, part[0])
+        lines.extend(part)
 
     def read_status() -> list[str]:
         nonlocal alarm_active
@@ -485,7 +589,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--watch", action="store_true", help="повторять вывод раз в секунду (Ctrl+C — выход)")
     parser.add_argument("--interval", type=float, default=1.0, help="период для --watch, с")
     parser.add_argument("--log", default="focas.log", help="файл журнала библиотеки (только Linux)")
+    parser.add_argument("--out", help="дописывать весь вывод ещё и в этот файл (UTF-8), параллельно с экраном")
     return parser
+
+
+class Output:
+    """Screen, and with --out also a UTF-8 file: everything the engineer sees ends up in the file."""
+
+    def __init__(self, path: str | None) -> None:
+        self._file = Path(path).expanduser().open("a", encoding="utf-8") if path else None
+
+    def line(self, text: str = "", *, error: bool = False) -> None:
+        print(text, file=sys.stderr if error else sys.stdout, flush=True)
+        if self._file is not None:
+            self._file.write(text + "\n")
+            self._file.flush()
+
+    def file_only(self, text: str) -> None:
+        """A line for the file alone: separates the runs appended to it."""
+        if self._file is not None:
+            self._file.write(text + "\n")
+            self._file.flush()
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -493,31 +621,48 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
+    try:
+        out = Output(args.out)
+    except OSError as exc:
+        print(f"ОШИБКА: не удалось открыть файл вывода {args.out}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        return _run(args, out)
+    finally:
+        out.close()
 
+
+def _run(args: argparse.Namespace, out: Output) -> int:
+    out.file_only(f"=== focas_probe {time.strftime('%Y-%m-%d %H:%M:%S %z')}: {args.ip}:{args.port}, {args.lib} ===")
     try:
         probe = FocasProbe(load_library(args.lib))
     except ProbeSetupError as exc:
-        print(f"ОШИБКА: {exc}", file=sys.stderr)
+        out.line(f"ОШИБКА: {exc}", error=True)
         return 2
 
     try:
         probe.startup(args.log)
-        print(f"Подключение к {args.ip}:{args.port} (таймаут {args.timeout} с)...")
+        out.line(f"Подключение к {args.ip}:{args.port} (таймаут {args.timeout} с)...")
         probe.connect(args.ip, args.port, args.timeout)
-        print("Подключено.\n")
+        out.line(f"Подключено за {probe.last_ms or 0:.0f} мс.\n")
+        for line in read_system(probe):
+            out.line(line)
+        out.line()
         while True:
             if args.watch:
-                print(f"--- {time.strftime('%H:%M:%S')} ---")
-            print("\n".join(read_report(probe)), flush=True)
+                out.line(f"--- {time.strftime('%H:%M:%S')} ---")
+            for line in read_report(probe):
+                out.line(line)
             if not args.watch:
                 return 0
-            print()
+            out.line()
             time.sleep(args.interval)
     except FocasError as exc:
-        print(f"ОШИБКА FOCAS: {exc}", file=sys.stderr)
+        took = f" (ответ за {probe.last_ms:.0f} мс)" if probe.last_ms is not None else ""
+        out.line(f"ОШИБКА FOCAS: {exc}{took}", error=True)
         return 1
     except KeyboardInterrupt:
-        print("\nОстановлено.")
+        out.line("\nОстановлено.")
         return 0
     finally:
         probe.disconnect()

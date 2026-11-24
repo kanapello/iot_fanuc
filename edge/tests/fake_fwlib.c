@@ -4,12 +4,13 @@
  *
  * Behaviour is selected by the IP address passed to cnc_allclibhndl3:
  *   10.0.0.1 - healthy machine, running, no alarms
- *   10.0.0.2 - machine in alarm, cnc_exeprgname / cnc_rdspmeter unsupported
+ *   10.0.0.2 - machine in alarm, cnc_sysinfo / cnc_exeprgname / cnc_rdspmeter unsupported
  *   anything else - EW_SOCKET
  */
 #include <string.h>
 
 #pragma pack(push, 4)
+typedef struct { short addinfo; short max_axis; char cnc_type[2]; char mt_type[2]; char series[4]; char version[4]; char axes[2]; } ODBSYS;
 typedef struct { short hdck, tmmode, aut, run, motion, mstb, emergency, alarm, edit; } ODBST;
 typedef struct { short dummy[2]; short data; short mdata; } ODBPRO;
 typedef struct { char name[36]; int o_num; } ODBEXEPRG;
@@ -45,6 +46,17 @@ short cnc_allclibhndl3(const char *ip, unsigned short port, int timeout, unsigne
 short cnc_freelibhndl(unsigned short h) { (void)h; mode = 0; return EW_OK; }
 
 #define CHECK_HANDLE if (h != 7 || mode == 0) return EW_HANDLE
+
+short cnc_sysinfo(unsigned short h, ODBSYS *s) {
+    CHECK_HANDLE;
+    if (mode == 2) return EW_FUNC;
+    memset(s, 0, sizeof(*s));
+    s->addinfo = 0x0002;  /* i series */
+    s->max_axis = 32;
+    memcpy(s->cnc_type, " 0", 2); memcpy(s->mt_type, " M", 2);
+    memcpy(s->series, "D4F1", 4); memcpy(s->version, "16.0", 4); memcpy(s->axes, "03", 2);
+    return EW_OK;
+}
 
 short cnc_statinfo(unsigned short h, ODBST *s) {
     CHECK_HANDLE;

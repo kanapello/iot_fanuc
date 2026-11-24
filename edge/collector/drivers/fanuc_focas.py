@@ -2,6 +2,12 @@
 
 Derived from tools/focas_probe.py. NOT yet verified on a real control.
 One driver instance = one FOCAS handle = one thread.
+
+Fwlib64.dll loads its companions (fwlibe64.dll, fwlib0iD64.dll) by bare name when
+it connects, through the classic DLL search (PATH) that ``os.add_dll_directory``
+does not change; on a live control that ended in EW_NODLL. The folder of the
+library therefore goes first on PATH of the process (and becomes the DLL
+directory via SetDllDirectoryW on Windows) before the library is loaded.
 """
 
 from __future__ import annotations
@@ -109,6 +115,29 @@ class FocasError(DriverError):
 
 _libraries: dict[str, Any] = {}
 _library_lock = threading.Lock()
+WINDOWS = os.name == "nt"
+
+
+def _set_dll_directory(folder: str) -> None:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
+    func = kernel32.SetDllDirectoryW
+    func.argtypes = [ctypes.c_wchar_p]
+    func.restype = ctypes.c_int
+    if not func(folder):
+        error = ctypes.get_last_error()  # type: ignore[attr-defined,unused-ignore]
+        log.warning("SetDllDirectoryW(%s) failed with Windows error %d", folder, error)
+
+
+def prepare_dll_search(folder: Path) -> None:
+    """Put the folder of Fwlib first on PATH of the process (once); on Windows make it the DLL directory."""
+    entry = str(folder)
+    same = os.path.normcase(os.path.normpath(entry))
+    rest = [
+        p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.normcase(os.path.normpath(p)) != same
+    ]
+    os.environ["PATH"] = os.pathsep.join([entry, *rest])
+    if WINDOWS:
+        _set_dll_directory(entry)
 
 
 def load_library(path: str) -> Any:
@@ -117,8 +146,8 @@ def load_library(path: str) -> Any:
         if path in _libraries:
             return _libraries[path]
         lib_path = Path(path).expanduser().resolve()
-        if os.name == "nt":
-            os.add_dll_directory(str(lib_path.parent))  # type: ignore[attr-defined,unused-ignore]
+        prepare_dll_search(lib_path.parent)
+        if WINDOWS:
             lib: Any = ctypes.WinDLL(str(lib_path))  # type: ignore[attr-defined,unused-ignore]
         else:
             lib = ctypes.CDLL(str(lib_path))

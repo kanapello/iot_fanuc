@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +46,15 @@ def test_healthy_machine_report(fake_lib: str, capsys: pytest.CaptureFixture[str
     code = probe.main(["--ip", "10.0.0.1", "--lib", fake_lib, "--log", "/dev/null"])
     out = capsys.readouterr().out
     assert code == 0
+    assert re.search(r"Подключено за \d+ мс", out)
+    # system information, once after connecting
+    assert "модель ЧПУ         : 0i-M" in out
+    assert "серия ПО           : D4F1" in out
+    assert "версия ПО          : 16.0" in out
+    assert "управляемых осей   : 3 (максимум 32)" in out
+    # every call reports its response time
+    for call in ("cnc_sysinfo", "cnc_statinfo", "cnc_rdprgnum", "cnc_actf", "cnc_acts", "cnc_rdmacro", "cnc_rdparam"):
+        assert re.search(rf"\({call}\).*\[\d+\.\d мс\]", out), call
     assert "MEM [1]" in out
     assert "STRT [3]" in out
     assert "выполняемая O1234, основная O1000" in out
@@ -65,6 +76,43 @@ def test_alarm_and_unsupported_signals(fake_lib: str, capsys: pytest.CaptureFixt
     assert "cnc_exeprgname): сигнал не поддерживается стойкой" in out
     assert "EW_FUNC (1)" in out
     assert "cnc_rdspmeter): сигнал не поддерживается стойкой" in out
+    assert re.search(r"Система \(cnc_sysinfo\): сигнал не поддерживается стойкой .*\[\d+\.\d мс\]", out)
+
+
+def test_output_is_also_written_to_a_utf8_file(
+    fake_lib: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "probe.txt"
+    for ip in ("10.0.0.1", "10.9.9.9"):  # runs are appended, errors included
+        probe.main(["--ip", ip, "--lib", fake_lib, "--log", "/dev/null", "--out", str(target)])
+    screen = capsys.readouterr()
+    written = target.read_text(encoding="utf-8")
+    assert written.count("=== focas_probe") == 2
+    assert "Счётчик деталей, макро #3901 (cnc_rdmacro): 15873" in written
+    assert "ОШИБКА FOCAS: cnc_allclibhndl3: EW_SOCKET (-16)" in written
+    for line in screen.out.splitlines() + screen.err.splitlines():
+        assert line in written  # everything on the screen is in the file
+    unwritable = tmp_path / "missing" / "probe.txt"
+    assert probe.main(["--ip", "10.0.0.1", "--lib", fake_lib, "--out", str(unwritable)]) == 2
+
+
+def test_library_folder_goes_first_on_path(
+    fake_lib: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Fwlib loads fwlibe64.dll / fwlib0iD64.dll by bare name: only PATH helps (EW_NODLL on a live control)."""
+    folder = str(Path(fake_lib).parent)
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", folder, "/bin"]))
+    assert probe.main(["--ip", "10.0.0.1", "--lib", fake_lib, "--log", "/dev/null"]) == 0
+    probe.main(["--ip", "10.0.0.1", "--lib", fake_lib, "--log", "/dev/null"])
+    assert os.environ["PATH"].split(os.pathsep) == [folder, "/usr/bin", "/bin"]  # first, and only once
+
+    # on Windows the folder also becomes the DLL directory
+    calls: list[str] = []
+    monkeypatch.setattr(probe, "WINDOWS", True)
+    monkeypatch.setattr(probe, "_set_dll_directory", calls.append)
+    probe.prepare_dll_search(tmp_path)
+    assert calls == [str(tmp_path)] and os.environ["PATH"].startswith(str(tmp_path) + os.pathsep)
+    capsys.readouterr()
 
 
 def test_unreachable_machine(fake_lib: str, capsys: pytest.CaptureFixture[str]) -> None:
