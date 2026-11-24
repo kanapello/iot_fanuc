@@ -382,7 +382,9 @@ export interface AlarmContext {
 export type RequestStatus = "new" | "accepted" | "in_progress" | "done";
 
 export interface RequestHistory {
-  ts: string;
+  ts: string; // the moment stated for the action
+  recorded_at: string; // when it was entered into the system
+  backdated: boolean; // a step entered more than 30 minutes after its stated moment
   action: string;
   executor_id: number | null;
   user_name: string;
@@ -404,6 +406,10 @@ export interface RepairRequest extends MachinePlace {
   accepted_at: string | null;
   started_at: string | null;
   completed_at: string | null;
+  accepted_recorded_at: string | null;
+  started_recorded_at: string | null;
+  completed_recorded_at: string | null;
+  backdated: string[]; // steps entered more than 30 minutes after their stated moment
   work_done: string | null;
   voided_at: string | null;
   void_reason: string | null;

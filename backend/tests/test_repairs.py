@@ -362,6 +362,63 @@ async def test_manual_request_reaction_restoration_and_withdrawal(plant: Plant, 
         assert (rows[first]["void_reason"], rows[second]["void_reason"]) == ("дубль заявки", "сами устранили")
 
 
+async def test_steps_entered_later_are_marked_for_the_customer(plant: Plant, session_factory: Factory) -> None:
+    """Each step keeps the stated moment and the moment of entry; over 30 minutes apart the customer sees a mark."""
+    m1 = plant.m1.machine_id
+    async with client(plant.tokens["master"]) as http:
+        failure = (NOW - timedelta(hours=4)).isoformat()
+        body = {"machine_id": m1, "description": "Не держит давление гидравлика", "failure_ts": failure}
+        request_id = (await http.post("/repair-requests", json=body)).json()["id"]
+    async with session_factory() as session, session.begin():  # the request was opened 3 hours ago
+        opened = {"at": NOW - timedelta(hours=3), "id": request_id}
+        await session.execute(text("UPDATE repair_requests SET created_at = :at WHERE id = :id"), opened)
+        await session.execute(
+            text("UPDATE repair_request_history SET ts = :at, recorded_at = :at WHERE request_id = :id"), opened
+        )
+    url = f"/repair-requests/{request_id}/status"
+    async with client(plant.tokens["service"]) as http:
+        accepted = {
+            "status": "accepted",
+            "executor_id": plant.users["service"],
+            "at": (NOW - timedelta(hours=2)).isoformat(),
+        }
+        assert (await http.post(url, json=accepted)).status_code == 200  # entered two hours late
+        on_time = {"status": "in_progress", "at": (datetime.now(UTC) - timedelta(minutes=29)).isoformat()}
+        assert (await http.post(url, json=on_time)).status_code == 200  # within 30 minutes: no mark
+        assert (await http.post(url, json={"status": "done", "work_done": "Замена уплотнений"})).status_code == 200
+
+    async with client(plant.tokens["master"]) as http:
+        (row,) = (await http.get("/repair-requests")).json()
+        assert row["backdated"] == ["accepted"]
+        request = (await http.get(f"/repair-requests/{request_id}")).json()
+    assert datetime.fromisoformat(request["accepted_at"]) == NOW - timedelta(hours=2)
+    entered = datetime.fromisoformat(request["accepted_recorded_at"])
+    assert abs((entered - datetime.now(UTC)).total_seconds()) < 60  # the moment of entry is kept as well
+    steps = {h["action"]: h for h in request["history"]}
+    assert (steps["accepted"]["backdated"], steps["in_progress"]["backdated"], steps["done"]["backdated"]) == (
+        True,
+        False,
+        False,
+    )
+    assert datetime.fromisoformat(steps["accepted"]["ts"]) == NOW - timedelta(hours=2)
+    assert datetime.fromisoformat(steps["accepted"]["recorded_at"]) == entered
+    assert steps["created"]["backdated"] is False
+    # the reaction still counts from the stated moments: failure 4 h ago, work started 29 min ago
+    assert request["reaction_s"] == pytest.approx((timedelta(hours=4) - timedelta(minutes=29)).total_seconds(), abs=180)
+    stored = await stored_rows(session_factory, request_id)
+    assert stored == [("created", False), ("accepted", True), ("in_progress", False), ("done", False)]
+
+
+async def stored_rows(factory: Factory, request_id: int) -> list[tuple[str, bool]]:
+    rows = await stored(
+        factory,
+        "SELECT action, recorded_at - ts > interval '30 minutes' FROM repair_request_history "
+        "WHERE request_id = :r ORDER BY ts, id",
+        r=request_id,
+    )
+    return [(r[0], bool(r[1])) for r in rows]
+
+
 # ---------------------------------------------------------------- maintenance by running hours
 
 
