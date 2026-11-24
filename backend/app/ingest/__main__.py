@@ -21,7 +21,11 @@ async def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
     engine = create_engine(settings.database_url)
-    service = IngestService(create_session_factory(engine), MessageValidator(settings.schemas_dir))
+    service = IngestService(
+        create_session_factory(engine),
+        MessageValidator(settings.schemas_dir),
+        refresh_s=settings.ingest_directory_refresh_s,
+    )
 
     task = asyncio.create_task(run_forever(settings, service))
     loop = asyncio.get_running_loop()

@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ingest.contract import MessageValidator
 from app.ingest.service import IngestService
 from tests.conftest import encode, make_message, seed_reference
 
@@ -154,6 +155,65 @@ async def test_collector_cannot_write_into_another_site(service: IngestService, 
     async with session_factory() as session:
         stored = (await session.execute(text("SELECT collector_id, machine_id FROM telemetry ORDER BY 1"))).all()
     assert [tuple(r) for r in stored] == [("c1", mine.machine_id), ("c2", other.machine_id)]
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_moved_or_deleted_collector_stops_writing_into_its_old_place(
+    session_factory: Factory, validator: MessageValidator
+) -> None:
+    """Collectors and machines are reloaded every 30 s: the cache does not keep old places alive."""
+    t1 = await seed_reference(session_factory, site="t1", machine="m1", collector="c1")
+    t2 = await seed_reference(session_factory, site="t2", machine="m2", collector="c2")
+    clock = Clock()
+    service = IngestService(session_factory, validator, refresh_s=30, clock=clock)
+    seq = iter(range(1, 1000))
+
+    def from_c1(site: str) -> tuple[str, bytes]:
+        return encode(make_message("telemetry", seq=next(seq)), site=site)
+
+    def from_c2(machine: str = "m2") -> tuple[str, bytes]:
+        return encode(make_message("telemetry", collector_id="c2", machine_id=machine, seq=next(seq)), site="t2")
+
+    async def rows_of(machine_id: int) -> int:
+        return int(await scalar(session_factory, f"SELECT count(*) FROM telemetry WHERE machine_id = {machine_id}"))
+
+    assert (await service.handle_batch([from_c1("t1"), from_c2()])).telemetry_inserted == 2
+
+    # the administrator moves c1 to site t2
+    async with session_factory() as session, session.begin():
+        await session.execute(text("UPDATE collectors SET site_id = :s WHERE id = 'c1'"), {"s": t2.site_id})
+    clock.now += 10  # within the refresh period the cached place is still used
+    assert (await service.handle_batch([from_c1("t1")])).telemetry_inserted == 1
+    clock.now += 21  # 31 s since the directories were loaded
+    moved = await service.handle_batch([from_c1("t1"), from_c1("t2")])
+    assert (moved.telemetry_inserted, moved.rejected) == (1, 1)
+    assert await rows_of(t1.machine_id) == 2  # nothing new on the old site after the refresh
+    new_m1 = await scalar(session_factory, f"SELECT id FROM machines WHERE site_id = {t2.site_id} AND code = 'm1'")
+    assert await rows_of(new_m1) == 1  # c1 now writes to machine m1 of site t2
+
+    # the administrator gives m2 to c1 and deletes c2
+    async with session_factory() as session, session.begin():
+        await session.execute(text("UPDATE machines SET collector_id = 'c1' WHERE id = :m"), {"m": t2.machine_id})
+        await session.execute(text("DELETE FROM collectors WHERE id = 'c2'"))
+    clock.now += 31
+    gone = await service.handle_batch([from_c2(), from_c2("m7")])  # m7 would be a new machine of c2
+    assert (gone.telemetry_inserted, gone.rejected) == (0, 2)
+    assert await rows_of(t2.machine_id) == 1
+    assert await scalar(session_factory, "SELECT count(*) FROM machines WHERE code = 'm7'") == 0
+    async with session_factory() as session:
+        reasons = (await session.execute(text("SELECT reason FROM ingest_rejects ORDER BY id"))).scalars().all()
+    assert reasons == [
+        "collector does not belong to the organization/site of the topic",
+        "unknown collector",
+        "unknown collector",
+    ]
 
 
 async def test_heartbeat_and_lost_buffer(
