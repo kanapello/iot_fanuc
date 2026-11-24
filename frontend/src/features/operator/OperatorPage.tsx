@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, type Machine, type Reason } from "../../api/client";
+import { api, type LastCycle, type Machine, type Reason } from "../../api/client";
 import { t } from "../../shared/i18n";
 import { formatDuration, percent, stateColor, stateLabel } from "../../shared/states";
 import { useLive, useNow } from "../../shared/useLive";
@@ -9,13 +9,22 @@ import { useLive, useNow } from "../../shared/useLive";
 // Touch targets for gloves: every button is at least 64 px high.
 const bigButton = "min-h-[72px] rounded-2xl px-6 py-4 text-2xl font-bold active:scale-[0.98] disabled:opacity-50";
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-2xl bg-slate-800 p-5">
       <div className="text-xl font-semibold uppercase text-slate-400">{label}</div>
       <div className="tabular mt-1 text-5xl font-bold">{value}</div>
+      {hint && <div className="tabular mt-1 text-2xl text-slate-300">{hint}</div>}
     </div>
   );
+}
+
+/** "4:32 / 4:00": the last cycle (part to part) and its norm; the hint tells the machining time. */
+function lastCycleMetric(cycle: LastCycle | null): { value: string; hint?: string } {
+  if (!cycle) return { value: "—" };
+  const norm = cycle.norm_s != null ? formatDuration(cycle.norm_s) : "—";
+  const kind = cycle.kind === "normal" ? "" : ` · ${t.operator.cycleKinds[cycle.kind]}`;
+  return { value: `${formatDuration(cycle.duration_s)} / ${norm}`, hint: `${t.operator.machining} ${formatDuration(cycle.machine_s)}${kind}` };
 }
 
 function ReasonPicker({ reasons, onPick, onClose }: { reasons: Reason[]; onPick: (id: number) => void; onClose?: () => void }) {
@@ -197,6 +206,7 @@ export function OperatorPage() {
           />
           <Metric label={t.operator.planShift} value={shift?.plan_shift != null ? String(shift.plan_shift) : "—"} />
           <Metric label={t.operator.oee} value={percent(shift?.oee)} />
+          <Metric label={t.operator.lastCycle} {...lastCycleMetric(live.last_cycle)} />
         </section>
       )}
 

@@ -122,6 +122,18 @@ export interface Live {
   part_count: number | null;
   last_ts: string | null;
   shift: ShiftLive | null;
+  last_cycle: LastCycle | null;
+}
+
+export interface LastCycle {
+  end: string;
+  program: string | null;
+  parts: number;
+  kind: "normal" | "setup" | "incomplete";
+  duration_s: number; // from the previous part to this one
+  machine_s: number; // RUN
+  gap_s: number;
+  norm_s: number | null; // the norm for this cycle (norm per part x parts)
 }
 
 export interface Machine {
@@ -442,4 +454,33 @@ export interface MaintenanceRecord {
   comment: string | null;
   voided_at: string | null;
   void_reason: string | null;
+}
+
+export interface CycleSummary {
+  cycles: number;
+  machine_median_s: number | null;
+  load_median_s: number | null;
+  cycle_median_s: number | null;
+  interrupt_share: number | null;
+}
+
+export interface CycleStats extends CycleSummary {
+  machine_id: number;
+  machine_name: string;
+  program: string | null;
+  total: number;
+  setup: number;
+  incomplete: number;
+  parts: number;
+  threshold_s: number;
+  threshold_auto: boolean;
+  pauses: number;
+  pause_s: number;
+  norm_per_part_s: number | null;
+  machine_per_part_median_s: number | null;
+  vs_norm: number | null;
+  machine_hist: { from: number; to: number; count: number }[];
+  load_hist: { from: number; to: number; count: number }[];
+  by_shift: (CycleSummary & { name: string; start: string; end: string })[];
+  by_day: (CycleSummary & { day: string })[];
 }

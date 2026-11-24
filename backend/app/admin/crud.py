@@ -71,6 +71,9 @@ class MachineIn(BaseModel):
     controller_type: str | None = None
     is_active: bool = True
     sort_order: int = 0
+    # a gap from a part to the next start longer than this is downtime, not part change;
+    # empty = three times the median machine time of the program, at least 10 minutes
+    cycle_pause_threshold_s: float | None = Field(default=None, gt=0, le=86400)
 
 
 class _Node(BaseModel):

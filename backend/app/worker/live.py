@@ -14,6 +14,7 @@ from app.admin import journal
 from app.admin import service as admin
 from app.oee import service as oee
 from app.oee.calc import NormTable
+from app.reports import cycles as cycle_reports
 from app.timeline import service as timeline
 
 
@@ -79,6 +80,7 @@ async def build_live(session: AsyncSession, machine: dict[str, Any], now: dateti
         "part_count": sample.get("part_count"),
         "last_ts": _iso(sample.get("ts")),
         "shift": shift_payload,
+        "last_cycle": await cycle_reports.last_cycle(session, machine),
     }
 
 

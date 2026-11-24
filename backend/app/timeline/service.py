@@ -9,7 +9,19 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.timeline.builder import IDLE, NOT_RUN, RUN, STOP, Interval, Rules, Sample, build_intervals, part_events
+from app.timeline.builder import (
+    IDLE,
+    NOT_RUN,
+    RUN,
+    STOP,
+    Interval,
+    PartEvent,
+    Rules,
+    Sample,
+    build_intervals,
+    part_events,
+)
+from app.timeline.cycles import build_cycles
 
 _SAMPLE_COLUMNS = "ts, connected, mode, run, alarm, emergency, program, part_count"
 
@@ -178,9 +190,101 @@ async def rebuild(
                 text("INSERT INTO part_events (machine_id, ts, program, delta) VALUES (:m, :ts, :program, :delta)"),
                 [{"m": machine_id, "ts": e.ts, "program": e.program, "delta": e.delta} for e in events],
             )
+        await _rebuild_cycles(session, machine_id, start, parts_end, now)
     if continue_from is not None and closed_to is not None:
         await mark_dirty(session, {machine_id: continue_from})
     return changed_from
+
+
+async def _part_events(session: AsyncSession, sql: str, params: dict[str, Any]) -> list[PartEvent]:
+    rows = await session.execute(
+        text(f"SELECT ts, program, delta FROM part_events WHERE machine_id = :m {sql}"), params
+    )
+    return [PartEvent(r.ts, r.program, r.delta) for r in rows]
+
+
+async def _rebuild_cycles(
+    session: AsyncSession, machine_id: int, since: datetime, until: datetime, now: datetime
+) -> None:
+    """Cycles whose window touches the rebuilt period [since, until), and the one crossing ``until``."""
+    params: dict[str, Any] = {"m": machine_id, "since": since, "until": until}
+    events = await _part_events(session, "AND ts >= :since AND ts < :until ORDER BY ts", params)
+    events += await _part_events(session, "AND ts >= :until ORDER BY ts LIMIT 1", params)
+    previous = await _part_events(session, "AND ts < :since ORDER BY ts DESC LIMIT 1", params)
+    last = events[-1].ts if events else None
+    await session.execute(
+        text(
+            "DELETE FROM cycles WHERE machine_id = :m AND end_ts >= :since "
+            "AND (CAST(:last AS timestamptz) IS NULL OR end_ts <= :last)"
+        ),
+        {**params, "last": last},
+    )
+    if not events:
+        return
+    first = previous[0].ts if previous else events[0].ts
+    rows = await session.execute(
+        text(
+            "SELECT state, start_ts, end_ts, program FROM state_intervals WHERE machine_id = :m "
+            "AND start_ts < :hi AND (end_ts IS NULL OR end_ts > :lo) ORDER BY start_ts"
+        ),
+        {"m": machine_id, "lo": first, "hi": last},
+    )
+    intervals = [Interval(r.state, r.start_ts, r.end_ts, r.program) for r in rows]
+    cycles = build_cycles(events, previous[0] if previous else None, intervals, now)
+    if cycles:
+        await session.execute(
+            text(
+                "INSERT INTO cycles (machine_id, end_ts, start_ts, program, parts, machine_s, gap_s, idle_s, stop_s, "
+                "alarm_s, setup_s, offline_s, kind) VALUES (:m, :end, :start, :program, :parts, :machine, :gap, "
+                ":idle, :stop, :alarm, :setup, :offline, :kind)"
+            ),
+            [
+                {
+                    "m": machine_id,
+                    "end": c.end,
+                    "start": c.start,
+                    "program": c.program,
+                    "parts": c.parts,
+                    "machine": c.machine_s,
+                    "gap": c.gap_s,
+                    "idle": c.idle_s,
+                    "stop": c.stop_s,
+                    "alarm": c.alarm_s,
+                    "setup": c.setup_s,
+                    "offline": c.offline_s,
+                    "kind": c.kind,
+                }
+                for c in cycles
+            ],
+        )
+
+
+async def list_cycles(
+    session: AsyncSession, machine_ids: Sequence[int], start: datetime, end: datetime
+) -> list[dict[str, Any]]:
+    """Cycles whose part was done in [start, end), oldest first."""
+    rows = await session.execute(
+        text(
+            "SELECT machine_id, start_ts, end_ts, program, parts, machine_s, gap_s, idle_s, stop_s, alarm_s, setup_s, "
+            "offline_s, kind FROM cycles WHERE machine_id = ANY(:ids) AND end_ts >= :start AND end_ts < :end "
+            "ORDER BY machine_id, end_ts"
+        ),
+        {"ids": list(machine_ids), "start": start, "end": end},
+    )
+    return [dict(r._mapping) for r in rows]
+
+
+async def last_cycle(session: AsyncSession, machine_id: int) -> dict[str, Any] | None:
+    row = (
+        await session.execute(
+            text(
+                "SELECT start_ts, end_ts, program, parts, machine_s, gap_s, idle_s, stop_s, alarm_s, setup_s, "
+                "offline_s, kind FROM cycles WHERE machine_id = :m ORDER BY end_ts DESC LIMIT 1"
+            ),
+            {"m": machine_id},
+        )
+    ).first()
+    return dict(row._mapping) if row else None
 
 
 async def _store_intervals(
