@@ -31,7 +31,7 @@
 - Frontend: React 18 + TypeScript + Vite, pnpm, TanStack Query, react-router-dom, Tailwind, ECharts. API-клиент пока написан вручную (`frontend/src/api/client.ts`): генерация из OpenAPI — когда у маршрутов появятся модели ответов.
 - БД: PostgreSQL 16 + TimescaleDB. Кэш/live: Redis 7. Брокер: Mosquitto 2.
 - Качество: `ruff` (lint+format), `mypy --strict` для `backend/app` и `edge/collector`, `pytest`, `testcontainers` для интеграционных тестов; фронтенд — проверка типов `tsc` и сборка. Модульных и e2e-тестов фронтенда, линтера JS и pre-commit пока нет — не ссылаться на них, пока не добавлены.
-- CI — GitHub Actions (`.github/workflows/ci.yml`): backend (ruff, mypy, pytest), edge (ruff, mypy, pytest), frontend (сборка), сборка Docker-образов. Pull request сливается в `main` только с зелёными проверками.
+- CI — GitHub Actions (`.github/workflows/ci.yml`): backend (ruff, mypy, pytest), edge (ruff, mypy, pytest), frontend (сборка), deploy (compose-файлы, Caddyfile, shellcheck), сборка Docker-образов. Pull request сливается в `main` только с зелёными проверками.
 
 ## Команды (Makefile — поддерживать)
 
@@ -47,6 +47,14 @@ make test          # все тесты backend + edge + frontend (frontend — �
 make lint          # ruff, mypy, tsc
 make format        # ruff format + ruff check --fix
 make recalc from=<iso> [to=<iso>] [m=<machine_id>]   # пересчёт таймлайна и OEE
+
+# production на облачной VM (docs/runbooks/cloud-install.md)
+make env-prod domain=<домен> email=<почта>   # .env со случайными паролями
+make prod-up / prod-down / prod-ps / prod-logs s=<сервис> / prod-psql
+make backup-now / backup-list
+make restore-check [file=<имя>]              # копия → временная чистая база, сравнение с рабочей
+make restore file=<имя>|latest confirm=yes   # ЗАМЕНЯЕТ базу копией
+make prod-drop-demo                          # удалить «Демо-предприятие» миграций
 ```
 
 `make gen-client` (OpenAPI → TS-клиент) и `make edge-build-win` (сборка `.exe` коллектора на Windows)
