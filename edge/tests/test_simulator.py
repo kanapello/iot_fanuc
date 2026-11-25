@@ -146,3 +146,50 @@ def test_anchored_simulator_survives_a_restart(clock: FakeClock) -> None:
     clock.advance(5000)
     restarted = SimulatorDriver(scenario, clock=clock, anchor=0.0)
     assert restarted.read_snapshot() == before.read_snapshot()
+
+
+def test_recent_profile_takes_over_without_making_parts(clock: FakeClock) -> None:
+    """From ``recent_since`` on the machine follows the other scenario; the counter goes on smoothly."""
+    usual = Scenario.model_validate(
+        {
+            "name": "u",
+            "program": "O1",
+            "initial_part_count": 100,
+            "steps": [{"state": "run", "duration_s": 1000, "cycle_time_s": 10}],
+        }
+    )
+    worse = Scenario.model_validate(
+        {
+            "name": "w",
+            "program": "O1",
+            "initial_part_count": 7,
+            "steps": [{"state": "run", "duration_s": 100, "cycle_time_s": 20}, {"state": "idle", "duration_s": 100}],
+        }
+    )
+    start = clock()
+    plain = SimulatorDriver(usual, clock=clock, anchor=start)
+    driver = SimulatorDriver(usual, clock=clock, anchor=start, recent=worse, recent_since=start + 500)
+    clock.advance(499)
+    assert driver.read_snapshot() == plain.read_snapshot()  # before the switch: the usual scenario
+    before = driver.read_snapshot().part_count
+    clock.advance(1)
+    at_switch = driver.read_snapshot()
+    assert at_switch.part_count in (before, before + 1)  # no jump of the counter
+    clock.advance(250)  # 750 s: the worse scenario (a 200 s loop on the same clock) stands idle
+    snap = driver.read_snapshot()
+    assert snap.run == "STOP" and plain.read_snapshot().run == "START"
+    assert snap.part_count < plain.read_snapshot().part_count
+
+
+def test_recent_profile_needs_hours_and_long_history_steps() -> None:
+    from collector.config import SimulatorMachine
+
+    with pytest.raises(ValueError):
+        SimulatorMachine.model_validate({"id": "s", "driver": "simulator", "recent_profile": "milling_slow"})
+    with pytest.raises(ValueError):  # at most 28 days of history
+        SimulatorMachine.model_validate({"id": "s", "driver": "simulator", "backfill_hours": 673})
+    with pytest.raises(ValueError):  # the long history is not replayed finer than 30 s
+        SimulatorMachine.model_validate({"id": "s", "driver": "simulator", "backfill_long_step_s": 10})
+    machine = SimulatorMachine.model_validate({"id": "s", "driver": "simulator", "backfill_hours": 672})
+    assert machine.backfill_step(3600) == 5.0  # the last 72 hours: fine
+    assert machine.backfill_step(100 * 3600) == 30.0  # older: coarse

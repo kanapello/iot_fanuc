@@ -8,6 +8,7 @@ import logging
 import signal
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -40,7 +41,9 @@ class LaggedClock:
         return datetime.now(UTC) - timedelta(seconds=self.lag_s)
 
 
-def build_driver(config: CollectorConfig, machine: MachineConfig, clock: LaggedClock) -> MachineDriver:
+def build_driver(
+    config: CollectorConfig, machine: MachineConfig, clock: LaggedClock, recent_since: float | None = None
+) -> MachineDriver:
     if isinstance(machine, FanucFocasMachine):
         if config.focas is None:
             raise ValueError("config section 'focas.library_path' is required for fanuc_focas machines")
@@ -50,9 +53,37 @@ def build_driver(config: CollectorConfig, machine: MachineConfig, clock: LaggedC
             config.focas.library_path, machine.ip, machine.port, machine.part_counter, signals=machine.signals
         )
     scenario = load_scenario(machine.profile, config.scenarios_dir)
+    recent = load_scenario(machine.recent_profile, config.scenarios_dir) if machine.recent_profile else None
     return SimulatorDriver(
-        scenario, offset_s=machine.offset_s, time_scale=machine.time_scale, clock=clock.wall, anchor=0.0
+        scenario,
+        offset_s=machine.offset_s,
+        time_scale=machine.time_scale,
+        clock=clock.wall,
+        anchor=0.0,
+        recent=recent,
+        recent_since=recent_since,
     )
+
+
+def recent_profile_since(config: CollectorConfig, now: float) -> dict[str, float]:
+    """When each simulated machine with a ``recent_profile`` switched to it (Unix time).
+
+    Fixed on the first start (``recent_hours`` before it) and kept next to the buffer: the moment must
+    not move on a restart, or the part counter of the machine would jump.
+    """
+    marker = Path(config.buffer.path).with_name("recent-profile.json")
+    try:
+        known = {str(k): float(v) for k, v in json.loads(marker.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError, AttributeError):
+        known = {}
+    result = {}
+    for m in config.machines:
+        if isinstance(m, SimulatorMachine) and m.recent_profile:
+            result[m.id] = known.get(m.id, now - m.recent_hours * 3600)
+    if result and result != known:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({**known, **result}), encoding="utf-8")
+    return result
 
 
 def history_to_replay(config: CollectorConfig, buffer: Buffer) -> set[str]:
@@ -79,13 +110,18 @@ def history_to_replay(config: CollectorConfig, buffer: Buffer) -> set[str]:
     return wanted
 
 
-def run_machine(poller: MachinePoller, clock: LaggedClock, step_s: float, stop: threading.Event) -> None:
-    """Replay the simulated past in fast-forward (if any), then poll in real time."""
+def run_machine(
+    poller: MachinePoller, clock: LaggedClock, step: Callable[[float], float], stop: threading.Event
+) -> None:
+    """Replay the simulated past in fast-forward (if any), then poll in real time.
+
+    ``step(lag_s)``: how far the replayed clock moves after a poll made ``lag_s`` seconds in the past.
+    """
     if clock.lag_s > 0:
         log.info("%s: replaying %.1f h of simulated history", poller.machine_id, clock.lag_s / 3600)
         while clock.lag_s > 0 and not stop.is_set():
             poller.poll_once()
-            clock.lag_s = max(0.0, clock.lag_s - step_s)
+            clock.lag_s = max(0.0, clock.lag_s - step(clock.lag_s))
         log.info("%s: history replayed, switching to real time", poller.machine_id)
     poller.run(stop)
 
@@ -94,16 +130,17 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
     buffer = Buffer(config.buffer.path, config.buffer.max_age_days)
     publisher = MqttPublisher(config.mqtt, client_id=config.collector_id, buffer=buffer)
     replay = history_to_replay(config, buffer)
+    switched = recent_profile_since(config, time.time())
     pollers: list[MachinePoller] = []
     threads: list[threading.Thread] = []
     for machine in config.machines:
         clock = LaggedClock()
-        step_s = 1.0
+        step: Callable[[float], float] = lambda _lag: 1.0  # noqa: E731
         if isinstance(machine, SimulatorMachine) and machine.id in replay:
-            clock.lag_s, step_s = machine.backfill_hours * 3600, machine.backfill_step_s
+            clock.lag_s, step = machine.backfill_hours * 3600, machine.backfill_step
         poller = MachinePoller(
             machine.id,
-            build_driver(config, machine, clock),
+            build_driver(config, machine, clock, switched.get(machine.id)),
             MessageFactory(
                 config.org, config.site, config.collector_id, machine.id, partial(buffer.next_seq, machine.id)
             ),
@@ -116,7 +153,7 @@ def run(config: CollectorConfig, stop: threading.Event) -> None:
         )
         pollers.append(poller)
         threads.append(
-            threading.Thread(target=run_machine, args=(poller, clock, step_s, stop), name=f"poller-{machine.id}")
+            threading.Thread(target=run_machine, args=(poller, clock, step, stop), name=f"poller-{machine.id}")
         )
     publisher.start()
     threads.append(

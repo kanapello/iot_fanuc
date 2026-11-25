@@ -163,3 +163,24 @@ def test_history_is_replayed_once_even_if_the_buffer_is_lost(tmp_path: Path) -> 
     for leftover in (tmp_path / "data").glob("buffer.db*"):  # the buffer file is lost
         leftover.unlink()
     assert history_to_replay(config, Buffer(config.buffer.path)) == set()
+
+
+def test_recent_profile_moment_is_kept_across_restarts(tmp_path: Path) -> None:
+    from collector.config import CollectorConfig
+    from collector.main import recent_profile_since
+
+    config = CollectorConfig.model_validate(
+        {
+            "org": "demo",
+            "site": "plant1",
+            "collector_id": "edge-sim",
+            "mqtt": {"host": "localhost"},
+            "buffer": {"path": str(tmp_path / "data" / "buffer.db")},
+            "machines": [
+                {"id": "sim01", "driver": "simulator", "recent_profile": "milling_slow", "recent_hours": 2},
+                {"id": "sim02", "driver": "simulator"},
+            ],
+        }
+    )
+    assert recent_profile_since(config, 10_000.0) == {"sim01": 10_000.0 - 7200}
+    assert recent_profile_since(config, 99_999.0) == {"sim01": 10_000.0 - 7200}  # a restart does not move it
