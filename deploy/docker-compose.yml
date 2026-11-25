@@ -26,6 +26,10 @@ x-backend: &backend
     MM_DEMO_PASSWORD: ${MM_DEMO_PASSWORD:-demo}
     MM_LOG_LEVEL: ${MM_LOG_LEVEL:-INFO}
     MM_PUBLIC_URL: ${MM_PUBLIC_URL:-}
+    # Telegram notifications (ADR 0011): the worker sends, the API builds the link to the bot
+    MM_TELEGRAM_BOT_TOKEN: ${MM_TELEGRAM_BOT_TOKEN:-}
+    MM_TELEGRAM_BOT_USERNAME: ${MM_TELEGRAM_BOT_USERNAME:-}
+    MM_NOTIFY_REPEAT_MINUTES: ${MM_NOTIFY_REPEAT_MINUTES:-15}
 
 services:
   mosquitto:

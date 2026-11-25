@@ -75,9 +75,12 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
         label: t.admin.areas,
         resource: "areas",
         node: "site",
-        blank: { name: "" },
+        blank: { name: "", stop_alert_minutes: 10 },
         rowActions: (row, report) => <AreaStickersAction row={row} report={report} />,
-        columns: [{ key: "name", label: c.name, type: "text" }],
+        columns: [
+          { key: "name", label: c.name, type: "text" },
+          { key: "stop_alert_minutes", label: c.stopAlert, type: "number" },
+        ],
       },
       {
         key: "collectors",

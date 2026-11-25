@@ -22,6 +22,7 @@ from app.core.config import Settings, checked_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
 from app.ingest.health import find_seq_gaps
+from app.notify.service import Notifier
 from app.oee import service as oee
 from app.oee.dirty import mark_oee_dirty
 from app.timeline import service as timeline
@@ -38,10 +39,20 @@ class Worker:
     lives in timeline_dirty / oee_dirty, so a restart at any moment loses nothing.
     """
 
-    def __init__(self, settings: Settings, session_factory: SessionFactory, redis: Redis | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        session_factory: SessionFactory,
+        redis: Redis | None = None,
+        notifier: Notifier | None = None,
+    ) -> None:
         self._settings = settings
         self._session_factory = session_factory
         self._redis = redis
+        # Telegram notifications (ADR 0011): only with a bot token
+        if notifier is None and settings.telegram_bot_token:
+            notifier = Notifier(settings, session_factory)
+        self._notifier = notifier
         self._oee_at: dict[int, datetime] = {}  # last refresh of the current hour / shift (only a throttle)
         self._published: dict[int, str] = {}
         self._gaps_at: datetime | None = None
@@ -99,17 +110,35 @@ class Worker:
             except Exception:
                 log.exception("machine tick failed", extra={"machine_id": machine["id"]})
         await self.check_seq_gaps(now)
+        if self._notifier is not None:
+            try:  # after the timeline: conditions see the states of this tick
+                await self._notifier.tick(now)
+            except Exception:
+                log.exception("notifications failed")
 
     async def run(self) -> None:
         log.info("worker started", extra={"interval_s": self._settings.worker_interval_s})
-        while True:
-            started = asyncio.get_running_loop().time()
-            try:
-                await self.tick(datetime.now(UTC))
-            except Exception:
-                log.exception("worker tick failed")
-            elapsed = asyncio.get_running_loop().time() - started
-            await asyncio.sleep(max(0.2, self._settings.worker_interval_s - elapsed))
+        background = []
+        if self._notifier is not None:  # the outbox and the bot run beside the ticks, failures logged inside
+            background = [
+                asyncio.create_task(self._notifier.run_sender()),
+                asyncio.create_task(self._notifier.run_polling()),
+            ]
+            log.info("telegram notifications on")
+        try:
+            while True:
+                started = asyncio.get_running_loop().time()
+                try:
+                    await self.tick(datetime.now(UTC))
+                except Exception:
+                    log.exception("worker tick failed")
+                elapsed = asyncio.get_running_loop().time() - started
+                await asyncio.sleep(max(0.2, self._settings.worker_interval_s - elapsed))
+        finally:
+            for task in background:
+                task.cancel()
+            if self._notifier is not None:
+                await self._notifier.aclose()
 
 
 async def recalc(session_factory: SessionFactory, machine: str | None, start: datetime, end: datetime | None) -> None:

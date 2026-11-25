@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, query, type AlarmContext, type AlarmEpisode, type AlarmFrequency } from "../../api/client";
 import { Chart } from "../../shared/Chart";
 import { t } from "../../shared/i18n";
@@ -127,11 +127,18 @@ export function AlarmsPage() {
   const client = useQueryClient();
   const { data: me } = useMe();
   const selection = useNodeSelection(me?.sites);
-  const [period, setPeriod] = useState("week");
+  // a link from a notification: /alarms?machine=<id>&at=<start of the alarm> opens that machine and episode
+  const [search, setSearch] = useSearchParams();
+  const machineFilter = Number(search.get("machine")) || null;
+  const at = search.get("at");
+  const [period, setPeriod] = useState(at && Date.now() - Date.parse(at) > 7 * 86_400_000 ? "month" : "week");
   const [open, setOpen] = useState<string | null>(null);
+  const opened = useRef(false);
   const [error, setError] = useState("");
   const from = useMemo(() => new Date(Date.now() - PERIOD_DAYS[period] * 86_400_000).toISOString(), [period]);
-  const params = query({ from, site_id: selection.siteId, area_id: selection.areaId });
+  const params = machineFilter
+    ? query({ from, machine_id: machineFilter })
+    : query({ from, site_id: selection.siteId, area_id: selection.areaId });
   const episodes = useQuery({
     queryKey: ["alarms", params],
     queryFn: () => api<AlarmEpisode[]>(`/alarms${params}`),
@@ -144,6 +151,13 @@ export function AlarmsPage() {
     refetchInterval: 60_000,
     enabled: Boolean(me?.menu.alarms),
   });
+  useEffect(() => {
+    if (opened.current || !at || !episodes.data?.length) return;
+    const target = Date.parse(at);
+    const hit = episodes.data.find((e) => Math.abs(Date.parse(e.start_ts) - target) < 60_000) ?? episodes.data[0];
+    setOpen(episodeKey(hit));
+    opened.current = true;
+  }, [episodes.data, at]);
   if (!me) return <p className="text-slate-400">{t.common.loading}</p>;
   if (!me.menu.alarms) return <p className="text-slate-400">{t.common.noAccess}</p>;
 
@@ -167,9 +181,15 @@ export function AlarmsPage() {
             {t.alarms.periods[p]}
           </button>
         ))}
-        <div className="ml-auto">
-          <NodePicker sites={me.sites} selection={selection} />
-        </div>
+        {machineFilter ? (
+          <button className={`${button} ml-auto`} onClick={() => setSearch({})}>
+            {episodes.data?.[0]?.machine_name ?? t.alarms.machine} ✕
+          </button>
+        ) : (
+          <div className="ml-auto">
+            <NodePicker sites={me.sites} selection={selection} />
+          </div>
+        )}
       </div>
       {error && <p className="rounded bg-red-900/60 px-3 py-2 text-sm text-red-200">{error}</p>}
       <FrequencyTable rows={frequency.data ?? []} />

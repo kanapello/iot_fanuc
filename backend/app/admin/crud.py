@@ -57,6 +57,8 @@ class SiteIn(BaseModel):
 class AreaIn(BaseModel):
     site_id: int
     name: str
+    # a stop without a reason this long is told to the master of the area (Telegram, ADR 0011)
+    stop_alert_minutes: int = Field(default=10, ge=1, le=1440)
 
 
 class CollectorIn(BaseModel):

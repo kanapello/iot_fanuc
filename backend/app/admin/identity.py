@@ -37,42 +37,45 @@ async def load_scope(session: AsyncSession, settings: Settings, token: str | Non
     """The single place where a token becomes a set of reachable machines and roles."""
     if not token:
         return None
-    name, kind, user_id, superadmin = "", "user", None, False
-    grants: list[Grant] = []
-    if token.startswith("dev_"):
-        row = (
-            await session.execute(
-                text(
-                    "SELECT name, machine_id, area_id FROM device_tokens "
-                    "WHERE token_hash = :hash AND revoked_at IS NULL"
-                ),
-                {"hash": hash_token(token)},
-            )
-        ).first()
-        if row is None:
-            return None
-        name, kind = row.name, "device"
-        if row.machine_id is not None:
-            grants.append(Grant("kiosk", machine_id=row.machine_id))
-        else:
-            grants.append(Grant("display", area_id=row.area_id))
-    else:
+    if not token.startswith("dev_"):
         user_id = read_session_token(settings, token)
-        if user_id is None:
-            return None
-        user = (
-            await session.execute(
-                text("SELECT login, is_superadmin FROM users WHERE id = :id AND is_active"), {"id": user_id}
-            )
-        ).first()
-        if user is None:
-            return None
-        name, superadmin = user.login, user.is_superadmin
-        rows = await session.execute(
-            text("SELECT role, org_id, site_id, area_id FROM memberships WHERE user_id = :id"), {"id": user_id}
+        return None if user_id is None else await user_scope(session, user_id)
+    row = (
+        await session.execute(
+            text("SELECT name, machine_id, area_id FROM device_tokens WHERE token_hash = :hash AND revoked_at IS NULL"),
+            {"hash": hash_token(token)},
         )
-        grants = [Grant(r.role, r.org_id, r.site_id, r.area_id) for r in rows]
+    ).first()
+    if row is None:
+        return None
+    grant = (
+        Grant("kiosk", machine_id=row.machine_id)
+        if row.machine_id is not None
+        else Grant("display", area_id=row.area_id)
+    )
+    return await _scope(session, row.name, "device", None, False, [grant])
 
+
+async def user_scope(session: AsyncSession, user_id: int) -> Scope | None:
+    """Scope of an active user from their memberships: the same as for their requests to the API
+    (notifications use it to decide who may be told about a machine)."""
+    user = (
+        await session.execute(
+            text("SELECT login, is_superadmin FROM users WHERE id = :id AND is_active"), {"id": user_id}
+        )
+    ).first()
+    if user is None:
+        return None
+    rows = await session.execute(
+        text("SELECT role, org_id, site_id, area_id FROM memberships WHERE user_id = :id"), {"id": user_id}
+    )
+    grants = [Grant(r.role, r.org_id, r.site_id, r.area_id) for r in rows]
+    return await _scope(session, user.login, "user", user_id, user.is_superadmin, grants)
+
+
+async def _scope(
+    session: AsyncSession, name: str, kind: str, user_id: int | None, superadmin: bool, grants: list[Grant]
+) -> Scope:
     tree = await admin.hierarchy(session)
     sites = {s["id"]: s["org_id"] for s in tree["sites"]}
     areas = {a["id"]: a["site_id"] for a in tree["areas"]}
