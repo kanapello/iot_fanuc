@@ -1,5 +1,8 @@
 # Server stack. Run through the Makefile (`make up`) or:
 #   docker compose --env-file .env -f deploy/docker-compose.yml --profile dev up -d --build
+# Production on a cloud VM: docker-compose.prod.yml on top of this file (`make prod-up`, ADR 0010).
+# Only the web container is published here (MM_WEB_PORT); the API, the database, Redis and the broker
+# stay inside the compose network.
 name: machine-monitor
 
 x-backend: &backend
@@ -9,6 +12,7 @@ x-backend: &backend
   image: machine-monitor/backend:dev
   restart: unless-stopped
   environment: &backend-env
+    MM_ENV: ${MM_ENV:-dev}
     MM_DATABASE_URL: postgresql+asyncpg://${MM_DB_USER}:${MM_DB_PASSWORD}@db:5432/${MM_DB_NAME}
     MM_MQTT_HOST: mosquitto
     MM_MQTT_PORT: "1883"
@@ -107,7 +111,7 @@ services:
 
   api:
     <<: *backend
-    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["python", "-m", "app.api"]  # uvicorn on 8000, after the check of the settings
     healthcheck:
       test:
         - CMD
