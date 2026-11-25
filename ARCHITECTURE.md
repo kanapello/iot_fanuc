@@ -249,7 +249,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | `organizations` | id, code (уникален), name |
 | `sites` | id, org_id (обязателен), code (уникален в организации), name, timezone |
 | `areas` | id, site_id, name |
-| `machines` | id (bigint, внутренний ключ), site_id, code (уникален в площадке), area_id, name, controller_type, collector_id, state_rules_id, is_active |
+| `machines` | id (bigint, внутренний ключ), site_id, code (уникален в площадке), area_id, name, controller_type, collector_id, state_rules_id, is_active, cycle_pause_threshold_s, passport_code (код QR-наклейки: 8 знаков, уникален, выдаёт `new_passport_code()` — ADR 0009) |
 | `collectors` | id, site_id, name, last_heartbeat, version, epoch, buffer_lost_at |
 | `state_rules`, `shift_templates`, `downtime_reasons`, `scrap_reasons`, `programs` | org_id + site_id (null = значение по умолчанию для всех площадок организации); у `programs` ещё machine_id и valid_from |
 | `users` | id, login, password_hash, full_name, is_active, is_superadmin |
@@ -402,7 +402,15 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 
 ### 7.1. API (FastAPI)
 - REST `/api/v1/...`: machines, timeline, oee, reasons, annotations, scrap, shifts, programs, reports, admin, auth;
-  журнал аварий `alarms`, заявки `repair-requests`, обслуживание `maintenance` (п. 6.5); архив геометрии (п. 6.4).
+  журнал аварий `alarms`, заявки `repair-requests`, обслуживание `maintenance` (п. 6.5); архив геометрии (п. 6.4);
+  QR-паспорт `passport` (ниже).
+- **QR-паспорт станка** (ADR 0009). У станка постоянный случайный код `passport_code`; наклейка ведёт на
+  `https://<host>/m/<код>`, в QR только ссылка. `GET /passport/{code}` — куда ведёт наклейка по правам вызывающего:
+  `service` (карточка станка), `machine` (страница `/m/<код>`), `operator` (экран оператора); неверный код и станок
+  вне области доступа — одинаковый 404, без входа — 401. Администратор площадки: `POST /admin/machines/{id}/passport`
+  — новый код (старая наклейка перестаёт работать), `GET /admin/machines/{id}/passport.pdf` — наклейка 90 × 50 мм,
+  `GET /admin/areas/{id}/passports.pdf` — лист A4 наклеек участка. Адрес на наклейке — `MM_PUBLIC_URL`, иначе адрес
+  запроса (`X-Forwarded-Host` / `X-Forwarded-Proto` от nginx).
 - WebSocket `/ws/live?token=...` — изменения live-состояния станков из области доступа.
 - Аутентификация: вход по логину и паролю (JWT); пользователи и роли в БД (п. 7.3). Суперадмин создаётся при
   первом старте из `.env`. Киоск — device-токен, привязанный к одному станку (экран оператора) или одному
@@ -438,14 +446,15 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | Режим | Маршрут | Назначение |
 |---|---|---|
 | Экран оператора | `/operator/:machineId` | Крупный статус и таймер, программа, план/факт смены, последний цикл и норма; при `STOP` — автоматический запрос причины (6–8 крупных кнопок, 2 уровня); ввод брака; отметка «наладка» |
-| Вход | `/login` | Логин и пароль; киоск открывается по ссылке с токеном |
+| Вход | `/login` | Логин и пароль; киоск открывается по ссылке с токеном; после входа — возврат на страницу из `next` (только путь этого сайта) |
+| QR-паспорт | `/m/:code` | Для телефона. Без входа — вход и возврат; затем по роли: мастер, технолог, администратор — состояние, показатели смены, таймлайн (смена / 12 ч / 24 ч, отрезок по касанию), открытые заявки, заявка в два касания и по активной аварии; сервис — карточка станка; оператор — экран оператора; иначе — «нет доступа» (ADR 0009) |
 | Цеховой дашборд | `/dashboard/:areaId` | ТВ-режим: плитки станков (цвет состояния, длительность, OEE смены, текущая причина), авторотация участков; переключатель площадки и участка |
 | Аналитика | `/analytics/...` | OEE, Парето, таймлайн, циклы по программам, выпуск, экспорт |
 | Карточка станка | `/machines/:machineId` | Только сервис: дата последнего теста и дней прошло, тесты ballbar, ввод результатов, оригиналы, полярный график, тренд с событиями, отметки «столкновение», ремонты |
 | Аварии | `/alarms` | Журнал аварий: частота по станкам, эпизоды с длительностью, телеметрия за 10 минут до аварии, заявка одной кнопкой |
 | Ремонт и ТО | `/repairs` | Заявки на ремонт (статусы, исполнитель, реакция и восстановление, история) и график обслуживания по наработке; у сервиса — действия |
 | Сервис | `/service` | Только сервис: напоминания по обслуживанию, открытые заявки, список станков архива — дата последнего теста и сколько дней прошло |
-| Админка | `/admin/...` | Станки, участки, площадки, коллекторы, токены киосков, смены, причины, нормы цикла, пользователи и роли; вкладки — по роли |
+| Админка | `/admin/...` | Станки (с QR-кодом: наклейка PDF, новый код), участки (лист наклеек PDF), площадки, коллекторы, токены киосков, смены, причины, нормы цикла, пользователи и роли; вкладки — по роли |
 
 Меню показывает только разделы, доступные по роли.
 
@@ -468,7 +477,8 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | `web` | frontend (nginx, static + reverse proxy `/api`, `/ws`) | — |
 | `simulator-a`, `simulator-b` | edge (driver=simulator), два коллектора на двух площадках демо-организации | `dev` |
 
-Конфиг через `.env` (пример — `.env.example`). Тома для БД, брокера и буферов симуляторов.
+Конфиг через `.env` (пример — `.env.example`); адрес интерфейса для QR-наклеек — `MM_PUBLIC_URL`. Тома для БД,
+брокера и буферов симуляторов.
 Запланировано (этап 6), пока нет: `prometheus` и `grafana` (профиль `monitoring`), `backup` — pg_dump по расписанию.
 
 ### 8.2. Edge
@@ -498,7 +508,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | Слой | Технологии |
 |---|---|
 | Edge | Python 3.12, ctypes (FOCAS2), paho-mqtt, SQLite, pydantic (PyInstaller для Windows — запланирован) |
-| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), asyncpg, Alembic, pydantic v2, aiomqtt, redis-py |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), asyncpg, Alembic, pydantic v2, aiomqtt, redis-py, reportlab (PDF-наклейки) |
 | БД | PostgreSQL 16 + TimescaleDB, Redis 7 |
 | Брокер | Mosquitto 2 |
 | Frontend | React 18, TypeScript, Vite, TanStack Query, react-router-dom, Tailwind CSS, ECharts |
@@ -531,12 +541,12 @@ machine-monitor/
 │   │   ├── reports/          # отчёты, журнал аварий, экспорт
 │   │   ├── worker/           # таймлайн, OEE и live по отметкам пересчёта
 │   │   ├── api/              # FastAPI роутеры, WebSocket
-│   │   └── admin/            # справочники
+│   │   └── admin/            # справочники, пользователи, QR-паспорт и PDF-наклейки (шрифты — admin/fonts)
 │   └── tests/
 ├── frontend/
 │   └── src/
 │       ├── api/              # клиент API (пока написан вручную)
-│       ├── features/         # operator, dashboard, analytics, alarms, repairs, service, geometry, admin, auth
+│       ├── features/         # operator, dashboard, analytics, alarms, repairs, service, geometry, passport, admin, auth
 │       └── shared/
 ├── shared/
 │   └── schemas/              # JSON Schema сообщений MQTT (контракт)
