@@ -490,3 +490,17 @@ export interface CycleStats extends CycleSummary {
   by_shift: (CycleSummary & { name: string; start: string; end: string })[];
   by_day: (CycleSummary & { day: string })[];
 }
+
+export interface TelegramStatus {
+  name: string;
+  configured: boolean; // the server has a bot
+  bot: string | null;
+  linked: boolean;
+  username: string | null;
+  linked_at: string | null;
+}
+
+export interface NotificationType {
+  type: string;
+  enabled: boolean;
+}

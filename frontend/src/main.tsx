@@ -11,6 +11,7 @@ import { DashboardPage } from "./features/dashboard/DashboardPage";
 import { MachineCardPage } from "./features/geometry/MachineCardPage";
 import { OperatorPage } from "./features/operator/OperatorPage";
 import { PassportPage } from "./features/passport/PassportPage";
+import { ProfilePage } from "./features/profile/ProfilePage";
 import { RepairsPage } from "./features/repairs/RepairsPage";
 import { ServicePage } from "./features/service/ServicePage";
 import "./index.css";
@@ -59,9 +60,9 @@ function Shell() {
             {t.nav.admin}
           </NavLink>
         )}
-        <span className="ml-auto text-sm text-slate-400">
+        <NavLink to="/profile" className="ml-auto rounded px-2 py-2 text-sm text-slate-400 hover:bg-slate-800" title={t.profile.title}>
           {me ? `${me.name} · ${me.superadmin ? t.users.superadmin : me.roles.map(roleLabel).join(", ")}` : ""}
-        </span>
+        </NavLink>
         <button
           className="rounded px-3 py-2 text-sm text-slate-400 hover:bg-slate-800"
           onClick={() => {
@@ -110,6 +111,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/service" element={<ServicePage />} />
             <Route path="/machines/:machineId" element={<MachineCardPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
