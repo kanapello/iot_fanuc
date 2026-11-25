@@ -79,11 +79,11 @@ function KpiCard({ metric, card, labels, comparable }: { metric: OverviewMetric;
   }, [card, labels]);
   return (
     <section className="rounded-xl border border-slate-800 bg-slate-900 p-4" title={t.overview.cardHints[metric]}>
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-sm font-medium text-slate-300">{t.overview.cards[metric]}</h2>
+      <h2 className="text-sm font-medium text-slate-300">{t.overview.cards[metric]}</h2>
+      <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="tabular text-3xl font-bold">{percent(card.value, 1)}</span>
         <ChangePp change={card.change} comparable={comparable} />
       </div>
-      <div className="tabular mt-1 text-3xl font-bold">{percent(card.value, 1)}</div>
       <Chart option={option} height={130} />
     </section>
   );
@@ -219,7 +219,8 @@ function DowntimeCard({ downtime }: { downtime: Overview["downtime"] }) {
   const max = Math.max(...rows.map((r) => r.total), 1);
   return (
     <Panel title={t.overview.downtime}>
-      <div className="space-y-2.5">
+      {rows.every((r) => r.total < 1) && <p className="text-sm text-slate-400">{t.common.noData}</p>}
+      <div className={`space-y-2.5 ${rows.every((r) => r.total < 1) ? "hidden" : ""}`}>
         {rows.map((r) => (
           <div key={r.key}>
             <div className="flex justify-between gap-2 text-sm">
