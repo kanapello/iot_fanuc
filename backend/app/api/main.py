@@ -16,7 +16,8 @@ from redis.asyncio import Redis
 from app.admin import identity
 from app.admin import service as admin
 from app.api import geometry_routes, passport_routes, repairs_routes, routes
-from app.core.config import get_settings
+from app.api.security import SecurityHeadersMiddleware
+from app.core.config import checked_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
 from app.geometry import demo as geometry_demo
@@ -28,7 +29,7 @@ log = logging.getLogger("app.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_settings()
+    settings = checked_settings()
     setup_logging(settings.log_level)
     engine = create_engine(settings.database_url)
     app.state.settings = settings
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Machine Monitor API", version="0.4.0", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Every REST router of the application. The isolation test walks the routes of exactly this list.
 API_ROUTERS = (routes.router, geometry_routes.router, repairs_routes.router, passport_routes.router)
