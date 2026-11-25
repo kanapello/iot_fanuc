@@ -6,6 +6,7 @@ collector_id: edge-sim-a
 mqtt:
   host: mosquitto
   port: 1883
+  tls: false   # inside the compose network of the server; a real collector uses TLS (8883)
   username: edge-sim-a
   password_env: MM_MQTT_PASSWORD
 buffer:

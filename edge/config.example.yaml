@@ -3,9 +3,10 @@ org: demo                          # organization code (given by the service adm
 site: plant1                       # site code inside the organization
 collector_id: edge-shop1
 mqtt:
-  host: mm-server.local
+  host: mm.example.com               # the domain of the server (MM_DOMAIN)
   port: 8883
-  tls: true
+  tls: true                          # default; the certificate is checked against the system root CAs
+  # ca_file: ./ca.crt                # own CA instead of the system ones (a self-signed test server)
   username: edge-shop1
   password_env: MM_MQTT_PASSWORD   # the password itself is taken from this environment variable
 focas:

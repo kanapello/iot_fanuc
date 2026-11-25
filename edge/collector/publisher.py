@@ -53,7 +53,8 @@ class MqttPublisher:
             password = os.environ.get(config.password_env) if config.password_env else None
             self._client.username_pw_set(config.username, password)
         if config.tls:
-            self._client.tls_set()
+            # the system root CAs unless an own CA is given; the host name is always checked
+            self._client.tls_set(ca_certs=config.ca_file)
         self._client.reconnect_delay_set(min_delay=1, max_delay=30)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect

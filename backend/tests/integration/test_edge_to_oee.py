@@ -153,7 +153,8 @@ class Collector:
 
     def __init__(self, buffer_path: Path, port: int, clock: VirtualClock, start: datetime) -> None:
         self.buffer = Buffer(str(buffer_path))
-        self.publisher = MqttPublisher(MqttConfig(host="127.0.0.1", port=port, keepalive_s=5), "edge-it", self.buffer)
+        config = MqttConfig(host="127.0.0.1", port=port, tls=False, keepalive_s=5)
+        self.publisher = MqttPublisher(config, "edge-it", self.buffer)
         self.clock = clock
         self.poller = MachinePoller(
             "m1",
