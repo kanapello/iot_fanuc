@@ -504,3 +504,76 @@ export interface NotificationType {
   type: string;
   enabled: boolean;
 }
+
+export type OverviewPeriod = "shift" | "today" | "yesterday" | "7d" | "30d";
+export type OverviewMetric = "utilization" | "oee" | "performance" | "availability";
+
+export interface OverviewCard {
+  value: number | null;
+  previous: number | null; // the same elapsed part of the previous period; null = no data to compare
+  change: number | null; // value - previous (fractions; shown in percentage points)
+  series: (number | null)[]; // per bucket; null = no value (future, outside shifts)
+  previous_series: (number | null)[];
+  usual_series: (number | null)[];
+}
+
+export interface Compared {
+  value: number | null;
+  previous: number | null;
+}
+
+export interface OverviewMachine {
+  machine_id: number;
+  name: string;
+  area_id: number | null;
+  area_name: string | null;
+  passport_code: string | null;
+  utilization: Compared & { usual: number | null };
+  oee: Compared;
+  parts: Compared;
+  downtime_s: Compared;
+  alarms: Compared;
+}
+
+export interface Overview {
+  period: {
+    key: OverviewPeriod;
+    step: "hour" | "day";
+    from: string;
+    to: string;
+    now: string;
+    previous_from: string;
+    previous_to: string;
+    comparable: boolean;
+    shift_name: string | null;
+    timezone: string;
+    site_id: number;
+  };
+  buckets: { from: string; to: string; label: string }[];
+  cards: Record<OverviewMetric, OverviewCard>;
+  output: {
+    total: number;
+    good: number;
+    scrap: number;
+    previous: { total: number; good: number; scrap: number } | null;
+    change: number | null;
+  };
+  downtime: {
+    reasons: { reason_id: number; name: string; group_name: string | null; color: string | null; duration_s: number; count: number }[];
+    other_reasons_s: number;
+    unexplained: { total_s: number; by_state: Record<string, number> };
+  };
+  below_usual: { machine_id: number; name: string; utilization: number; usual: number; change: number }[];
+  slow_cycles: {
+    machine_id: number;
+    name: string;
+    program: string | null;
+    cycles: number;
+    median_s: number;
+    norm_s: number;
+    diff_s: number;
+    diff_pct: number;
+  }[];
+  machines: OverviewMachine[];
+  settings: { utilization_drop_pp: number; slow_cycle_pct: number };
+}

@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.admin import journal
+from app.admin import journal, passport
 from app.oee import service as oee
 from app.oee.calc import aggregate
 from app.reports import alarms
@@ -321,6 +321,7 @@ async def overview(
     episodes_prev = await alarms.episodes(session, ids, prev_start, prev_end, now) if prev_ok else []
     alarms_now = Counter(e["machine_id"] for e in episodes_now)
     alarms_prev = Counter(e["machine_id"] for e in episodes_prev)
+    links = await passport.codes(session, ids)
     per_machine = []
     below = []
     for machine in machines:
@@ -340,6 +341,7 @@ async def overview(
                 "name": machine["name"],
                 "area_id": machine["area_id"],
                 "area_name": machine["area_name"],
+                "passport_code": links.get(machine["id"]),
                 "utilization": {**pair(cur["utilization"], prev["utilization"]), "usual": usual_level},
                 "oee": pair(cur["oee"], prev["oee"]),
                 "parts": pair(data.parts_sum(elapsed, mid), data.parts_sum(layout.previous_elapsed, mid)),

@@ -60,3 +60,11 @@ async def sticker_rows(
 
 def passport_url(base_url: str, code: str) -> str:
     return f"{base_url.rstrip('/')}/m/{code}"
+
+
+async def codes(session: AsyncSession, machine_ids: Collection[int]) -> dict[int, str]:
+    """Passport codes of machines among ``machine_ids`` (the caller's scope): links to their pages."""
+    rows = await session.execute(
+        text("SELECT id, passport_code FROM machines WHERE id = ANY(:ids)"), {"ids": list(machine_ids)}
+    )
+    return {r.id: r.passport_code for r in rows}

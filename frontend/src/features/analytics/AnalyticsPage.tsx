@@ -6,7 +6,8 @@ import { api, query, type Interval, type Machine, type OeeRow, type ParetoRow, t
 import { Chart } from "../../shared/Chart";
 import { CyclesCard } from "./CyclesCard";
 import { t } from "../../shared/i18n";
-import { NodePicker, useMe, useNodeSelection } from "../../shared/session";
+import { useShellNode } from "../../shared/Shell";
+import { useMe } from "../../shared/session";
 import { formatDuration, formatTime, percent, STATE_COLORS, STATE_ORDER, stateColor, stateLabel } from "../../shared/states";
 
 type Preset = "currentShift" | "previousShift" | "today" | "yesterday";
@@ -38,9 +39,8 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 export function AnalyticsPage() {
   const [preset, setPreset] = useState<Preset>("currentShift");
   const { data: me } = useMe();
-  // shift boundaries are a property of a site, so analytics always works on one site
-  const selection = useNodeSelection(me?.sites, { requireSite: true });
-  const { siteId, areaId } = selection;
+  // shift boundaries are a property of a site, so analytics always works on one site (chosen at the top)
+  const { siteId, areaId } = useShellNode();
   const anchor = useMemo(() => new Date(Date.now() - 48 * 3600 * 1000).toISOString(), []);
 
   const { data: machines } = useQuery({ queryKey: ["machines"], queryFn: () => api<Machine[]>("/machines") });
@@ -196,7 +196,6 @@ export function AnalyticsPage() {
             {t.analytics[p]}
           </button>
         ))}
-        {me && <NodePicker sites={me.sites} selection={selection} allowAllSites={false} />}
         {range && (
           <span className="text-sm text-slate-400">
             {new Date(range.from).toLocaleString("ru-RU")} – {new Date(range.to).toLocaleString("ru-RU")}
