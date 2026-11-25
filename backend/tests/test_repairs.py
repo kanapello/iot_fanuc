@@ -383,7 +383,8 @@ async def test_steps_entered_later_are_marked_for_the_customer(plant: Plant, ses
             "at": (NOW - timedelta(hours=2)).isoformat(),
         }
         assert (await http.post(url, json=accepted)).status_code == 200  # entered two hours late
-        on_time = {"status": "in_progress", "at": (datetime.now(UTC) - timedelta(minutes=29)).isoformat()}
+        started = datetime.now(UTC) - timedelta(minutes=29)
+        on_time = {"status": "in_progress", "at": started.isoformat()}
         assert (await http.post(url, json=on_time)).status_code == 200  # within 30 minutes: no mark
         assert (await http.post(url, json={"status": "done", "work_done": "Замена уплотнений"})).status_code == 200
 
@@ -403,8 +404,11 @@ async def test_steps_entered_later_are_marked_for_the_customer(plant: Plant, ses
     assert datetime.fromisoformat(steps["accepted"]["ts"]) == NOW - timedelta(hours=2)
     assert datetime.fromisoformat(steps["accepted"]["recorded_at"]) == entered
     assert steps["created"]["backdated"] is False
-    # the reaction still counts from the stated moments: failure 4 h ago, work started 29 min ago
-    assert request["reaction_s"] == pytest.approx((timedelta(hours=4) - timedelta(minutes=29)).total_seconds(), abs=180)
+    # the reaction still counts from the stated moments: from the failure to the start of the work.
+    # Both stated moments are taken from the request itself: NOW is fixed when the module is imported,
+    # the start of the work 29 minutes before the real present, and the suite may run long in between.
+    expected = (started - datetime.fromisoformat(failure)).total_seconds()
+    assert request["reaction_s"] == pytest.approx(expected, abs=180)
     stored = await stored_rows(session_factory, request_id)
     assert stored == [("created", False), ("accepted", True), ("in_progress", False), ("done", False)]
 
