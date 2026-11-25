@@ -465,8 +465,8 @@ async def latest_sample(session: AsyncSession, machine_id: int) -> dict[str, Any
     row = (
         await session.execute(
             text(
-                "SELECT ts, connected, mode, run, program, program_name, feed_actual, spindle_speed, spindle_load, "
-                "part_count FROM telemetry WHERE machine_id = :m ORDER BY ts DESC LIMIT 1"
+                "SELECT ts, connected, mode, run, alarm_code, program, program_name, feed_actual, spindle_speed, "
+                "spindle_load, part_count FROM telemetry WHERE machine_id = :m ORDER BY ts DESC LIMIT 1"
             ),
             {"m": machine_id},
         )

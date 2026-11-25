@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 
 from app.admin import identity
 from app.admin import service as admin
-from app.api import geometry_routes, passport_routes, repairs_routes, routes
+from app.api import geometry_routes, passport_routes, profile_routes, repairs_routes, routes
 from app.api.security import SecurityHeadersMiddleware
 from app.core.config import checked_settings
 from app.core.db import create_engine, create_session_factory
@@ -49,7 +49,13 @@ app = FastAPI(title="Machine Monitor API", version="0.4.0", lifespan=lifespan)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Every REST router of the application. The isolation test walks the routes of exactly this list.
-API_ROUTERS = (routes.router, geometry_routes.router, repairs_routes.router, passport_routes.router)
+API_ROUTERS = (
+    routes.router,
+    geometry_routes.router,
+    repairs_routes.router,
+    passport_routes.router,
+    profile_routes.router,
+)
 for api_router in API_ROUTERS:
     app.include_router(api_router)
 

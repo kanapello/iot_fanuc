@@ -132,6 +132,23 @@ async def get(session: AsyncSession, request_id: int) -> dict[str, Any] | None:
     return dict(row._mapping) if row else None
 
 
+async def history_since(session: AsyncSession, after_id: int, limit: int = 200) -> list[dict[str, Any]]:
+    """Steps of every request after a position of the history, oldest first: for notifications."""
+    rows = await session.execute(
+        text(
+            "SELECT h.id, h.request_id, h.ts, h.action, h.user_name, r.executor_name, r.machine_id, "
+            "r.description, r.status FROM repair_request_history h JOIN repair_requests r ON r.id = h.request_id "
+            "WHERE h.id > :after ORDER BY h.id LIMIT :limit"
+        ),
+        {"after": after_id, "limit": limit},
+    )
+    return [dict(r._mapping) for r in rows]
+
+
+async def last_history_id(session: AsyncSession) -> int:
+    return int((await session.execute(text("SELECT COALESCE(max(id), 0) FROM repair_request_history"))).scalar_one())
+
+
 async def history(session: AsyncSession, request_id: int) -> list[dict[str, Any]]:
     rows = await session.execute(
         text(

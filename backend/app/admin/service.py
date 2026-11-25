@@ -46,6 +46,24 @@ async def list_machines_system(session: AsyncSession, active_only: bool = True) 
     return [dict(r._mapping) for r in rows]
 
 
+async def list_collectors_system(session: AsyncSession) -> list[dict[str, Any]]:
+    """Every collector with its site, organization, heartbeat and lost buffer: for notifications only."""
+    rows = await session.execute(
+        text(
+            "SELECT c.id, c.name, c.site_id, s.name AS site_name, s.org_id, o.name AS org_name, c.last_heartbeat, "
+            "c.buffer_lost_at FROM collectors c JOIN sites s ON s.id = c.site_id "
+            "JOIN organizations o ON o.id = s.org_id ORDER BY c.id"
+        )
+    )
+    return [dict(r._mapping) for r in rows]
+
+
+async def area_stop_alert_minutes(session: AsyncSession) -> dict[int, int]:
+    """Minutes of a stop without a reason before the master of the area is told (setting of the area)."""
+    rows = await session.execute(text("SELECT id, stop_alert_minutes FROM areas"))
+    return {r.id: r.stop_alert_minutes for r in rows}
+
+
 async def hierarchy(session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
     """Bare structure of the installation; the access layer filters it per principal."""
     orgs = await session.execute(text("SELECT id, code, name FROM organizations ORDER BY name"))

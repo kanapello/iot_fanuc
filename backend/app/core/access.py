@@ -163,6 +163,25 @@ class Scope:
             for g in self.grants
         )
 
+    def roles_on_machine(self, machine_id: int) -> set[str]:
+        """Roles granted on the machine or a node above it (who is told about the machine)."""
+        machine = next((m for m in self.machines if m.id == machine_id), None)
+        if machine is None:
+            return set()
+        return {g.role for g in self.grants if self._covers(g, machine)}
+
+    def roles_on_site(self, site_id: int) -> set[str]:
+        """Roles granted on the site or the organization above it (who is told about its collectors)."""
+        org_id = self.sites.get(site_id)
+        return {
+            g.role
+            for g in self.grants
+            if g.machine_id is None
+            and g.area_id is None
+            and (g.org_id is None or g.org_id == org_id)
+            and (g.site_id is None or g.site_id == site_id)
+        }
+
     def has(self, permission: str) -> bool:
         return self.superadmin or any(g.allows(permission) for g in self.grants)
 

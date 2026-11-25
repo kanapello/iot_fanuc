@@ -184,7 +184,8 @@ async def world(session_factory: Factory) -> World:
         world.passport_a = (
             await session.execute(text("SELECT passport_code FROM machines WHERE id = :m"), {"m": a1.machine_id})
         ).scalar_one()
-    app.state.settings = SETTINGS
+    # with a bot configured, so that the profile routes answer as in production
+    app.state.settings = SETTINGS.model_copy(update={"telegram_bot_token": "1:T", "telegram_bot_username": "mm_bot"})
     app.state.session_factory = session_factory
     app.state.redis = None
     return world
@@ -414,6 +415,14 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         ("POST", "/admin/machines/{machine_id}/passport"): [Call(f"/admin/machines/{m}/passport", "hidden")],
         ("GET", "/admin/machines/{machine_id}/passport.pdf"): [Call(f"/admin/machines/{m}/passport.pdf", "hidden")],
         ("GET", "/admin/areas/{area_id}/passports.pdf"): [Call(f"/admin/areas/{a.area_id}/passports.pdf", "hidden")],
+        # the profile concerns only the caller's own account: nothing of organization A is reachable through it
+        ("GET", "/profile/telegram"): [Call("/profile/telegram", "clean")],
+        ("POST", "/profile/telegram/link"): [Call("/profile/telegram/link", "clean")],
+        ("DELETE", "/profile/telegram"): [Call("/profile/telegram", "clean")],
+        ("GET", "/profile/notifications"): [Call("/profile/notifications", "clean")],
+        ("PUT", "/profile/notifications"): [
+            Call("/profile/notifications", "clean", json={"enabled": {"repair_status": False}})
+        ],
     }
 
 

@@ -121,7 +121,8 @@ async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessio
         await conn.execute(
             text(
                 "TRUNCATE organizations, users, telemetry, machine_events, ingest_rejects, state_intervals, "
-                "part_events, timeline_dirty, oee_dirty, oee_hourly, oee_shift RESTART IDENTITY CASCADE"
+                "part_events, timeline_dirty, oee_dirty, oee_hourly, oee_shift, notification_conditions, "
+                "notification_cursors RESTART IDENTITY CASCADE"
             )
         )
     return create_session_factory(engine)
@@ -245,6 +246,7 @@ async def put_samples(
             "mode": "MEM",
             "run": "STOP",
             "alarm": False,
+            "alarm_code": None,
             "emergency": False,
             "program": "O1",
             "part_count": None,
@@ -257,8 +259,9 @@ async def put_samples(
         await session.execute(
             text(
                 "INSERT INTO telemetry (msg_id, ts, machine_id, collector_id, seq, connected, mode, run, alarm, "
-                "emergency, program, part_count, received_at) VALUES (:msg_id, :ts, :machine_id, :collector_id, :seq, "
-                ":connected, :mode, :run, :alarm, :emergency, :program, :part_count, COALESCE(:received_at, now()))"
+                "alarm_code, emergency, program, part_count, received_at) VALUES (:msg_id, :ts, :machine_id, "
+                ":collector_id, :seq, :connected, :mode, :run, :alarm, :alarm_code, :emergency, :program, :part_count, "
+                "COALESCE(:received_at, now()))"
             ),
             rows,
         )

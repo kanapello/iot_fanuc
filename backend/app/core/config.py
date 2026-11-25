@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     # Touched while the MQTT subscription is active; used by the container healthcheck.
     ingest_ready_file: Path | None = None
 
+    # Telegram notifications (ADR 0011). Without a token nothing is sent; the bot name builds the
+    # link t.me/<bot>?start=<code> of the profile page.
+    telegram_bot_token: str | None = None
+    telegram_bot_username: str | None = None
+    telegram_api_url: str = "https://api.telegram.org"
+    # The same event of the same subject is announced at most once in this many minutes.
+    notify_repeat_minutes: int = 15
+    notify_interval_s: float = 10.0
+    collector_offline_notify_minutes: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:
