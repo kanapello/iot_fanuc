@@ -21,6 +21,7 @@ x-backend: &backend
     MM_DEMO_DATA: ${MM_DEMO_DATA:-false}
     MM_DEMO_PASSWORD: ${MM_DEMO_PASSWORD:-demo}
     MM_LOG_LEVEL: ${MM_LOG_LEVEL:-INFO}
+    MM_PUBLIC_URL: ${MM_PUBLIC_URL:-}
 
 services:
   mosquitto:

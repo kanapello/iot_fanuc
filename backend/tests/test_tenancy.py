@@ -43,6 +43,7 @@ class World:
     b: Seed  # org B
     tokens: dict[str, str] = field(default_factory=dict)
     ids: dict[str, int] = field(default_factory=dict)
+    passport_a: str = ""  # QR passport code of machine m1
 
 
 async def _user(
@@ -180,6 +181,9 @@ async def world(session_factory: Factory) -> World:
             session, world.ids["plan_a"], T0, "acme engineer", None, None
         )
         world.ids["alarm_ts"] = int(alarm_ts.timestamp())
+        world.passport_a = (
+            await session.execute(text("SELECT passport_code FROM machines WHERE id = :m"), {"m": a1.machine_id})
+        ).scalar_one()
     app.state.settings = SETTINGS
     app.state.session_factory = session_factory
     app.state.redis = None
@@ -406,6 +410,10 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
         ("POST", "/maintenance-records/{record_id}/void"): [
             Call(f"/maintenance-records/{w.ids['maintenance_record_a']}/void", "hidden", json={"reason": "hacked"})
         ],
+        ("GET", "/passport/{code}"): [Call(f"/passport/{w.passport_a}", "hidden")],
+        ("POST", "/admin/machines/{machine_id}/passport"): [Call(f"/admin/machines/{m}/passport", "hidden")],
+        ("GET", "/admin/machines/{machine_id}/passport.pdf"): [Call(f"/admin/machines/{m}/passport.pdf", "hidden")],
+        ("GET", "/admin/areas/{area_id}/passports.pdf"): [Call(f"/admin/areas/{a.area_id}/passports.pdf", "hidden")],
     }
 
 
@@ -476,6 +484,10 @@ async def test_another_organization_sees_nothing_on_any_route(world: World, sess
                         continue
                     response = await http.request(method, call.path, params=call.params)
                     assert response.status_code == 200, f"{owner} {call.path}: {response.text[:200]}"
+                    if response.headers["content-type"] == "application/pdf":  # originals of tests; QR stickers of m1
+                        content = response.content
+                        assert MARKER.encode() in content or world.passport_a.encode() in content, call.path
+                        continue
                     assert MARKER in response.text or not _is_empty(response.json()), f"{call.path} {call.params}"
 
 
