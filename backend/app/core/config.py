@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     ingest_batch_size: int = 500
     # Collectors and machines are cached by ingest; a moved or deleted collector is noticed within this time.
     ingest_directory_refresh_s: float = 30.0
+    # Public address of the web interface for links on QR stickers, e.g. https://mm.example.com;
+    # empty = taken from the request (Host / X-Forwarded-* headers of the reverse proxy).
+    public_url: str | None = None
     # Touched while the MQTT subscription is active; used by the container healthcheck.
     ingest_ready_file: Path | None = None
 

@@ -107,8 +107,8 @@ function CollisionsCard({ machineId }: { machineId: number }) {
           {new Date(m.ts).toLocaleString("ru-RU")} · {m.comment ?? "—"} {m.operator ? `(${m.operator})` : ""}
         </VoidableRow>
       ))}
-      <div className="flex gap-2">
-        <input className={`${input} flex-1`} placeholder={t.geometry.collisionComment} value={comment} onChange={(e) => setComment(e.target.value)} />
+      <div className="flex flex-wrap gap-2">
+        <input className={`${input} min-w-0 flex-1`} placeholder={t.geometry.collisionComment} value={comment} onChange={(e) => setComment(e.target.value)} />
         <button className="rounded bg-purple-700 px-3 py-1 text-sm hover:bg-purple-600" onClick={mark}>
           {t.geometry.markCollision}
         </button>
@@ -157,7 +157,7 @@ function RepairsCard({ machineId }: { machineId: number }) {
       {error && <p className="text-sm text-red-300">{error}</p>}
       <div className="flex flex-wrap gap-2">
         <input type="date" className={input} value={date} onChange={(e) => setDate(e.target.value)} />
-        <input className={`${input} flex-1`} placeholder={t.geometry.repairDescription} value={description} onChange={(e) => setDescription(e.target.value)} />
+        <input className={`${input} min-w-0 flex-1`} placeholder={t.geometry.repairDescription} value={description} onChange={(e) => setDescription(e.target.value)} />
         <button className="rounded bg-green-700 px-3 py-1 text-sm hover:bg-green-600" onClick={add}>
           {t.geometry.addRepair}
         </button>
@@ -216,7 +216,8 @@ export function MachineCardPage() {
             </button>
           )}
         </div>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full whitespace-nowrap text-sm">
           <thead className="text-left text-slate-400">
             <tr>
               <th className="px-2 py-1">{t.geometry.date}</th>
@@ -250,6 +251,7 @@ export function MachineCardPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {form && (

@@ -10,6 +10,7 @@ import { LoginPage } from "./features/auth/LoginPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
 import { MachineCardPage } from "./features/geometry/MachineCardPage";
 import { OperatorPage } from "./features/operator/OperatorPage";
+import { PassportPage } from "./features/passport/PassportPage";
 import { RepairsPage } from "./features/repairs/RepairsPage";
 import { ServicePage } from "./features/service/ServicePage";
 import "./index.css";
@@ -101,6 +102,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/dashboard/:areaId" element={<DashboardPage />} />
           <Route path="/operator/:machineId" element={<OperatorPage />} />
+          <Route path="/m/:code" element={<PassportPage />} />
           <Route element={<Shell />}>
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/admin" element={<AdminPage />} />

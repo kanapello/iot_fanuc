@@ -7,14 +7,15 @@ import { formatDuration, percent, stateColor, stateLabel } from "../../shared/st
 import { useLive, useNow } from "../../shared/useLive";
 
 // Touch targets for gloves: every button is at least 64 px high.
-const bigButton = "min-h-[72px] rounded-2xl px-6 py-4 text-2xl font-bold active:scale-[0.98] disabled:opacity-50";
+const bigButton =
+  "min-h-[72px] rounded-2xl px-3 py-4 text-lg font-bold active:scale-[0.98] disabled:opacity-50 sm:px-6 sm:text-2xl";
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Metric({ label, value, hint, wide = false }: { label: string; value: string; hint?: string; wide?: boolean }) {
   return (
-    <div className="rounded-2xl bg-slate-800 p-5">
-      <div className="text-xl font-semibold uppercase text-slate-400">{label}</div>
-      <div className="tabular mt-1 text-5xl font-bold">{value}</div>
-      {hint && <div className="tabular mt-1 text-2xl text-slate-300">{hint}</div>}
+    <div className={`min-w-0 rounded-2xl bg-slate-800 p-4 sm:p-5 ${wide ? "col-span-2 xl:col-span-1" : ""}`}>
+      <div className="text-base font-semibold uppercase text-slate-400 sm:text-xl">{label}</div>
+      <div className="tabular mt-1 break-words text-3xl font-bold sm:text-5xl">{value}</div>
+      {hint && <div className="tabular mt-1 text-lg text-slate-300 sm:text-2xl">{hint}</div>}
     </div>
   );
 }
@@ -80,7 +81,7 @@ function ScrapPanel({ machineId, program, onDone }: { machineId: number; program
           {t.common.cancel}
         </button>
       </div>
-      <div className="mb-5 flex items-center gap-4">
+      <div className="mb-5 flex flex-wrap items-center gap-4">
         <span className="text-2xl text-slate-300">{t.operator.scrapQty}</span>
         <button className={`${bigButton} w-24 bg-slate-600`} onClick={() => setQty((q) => Math.max(1, q - 1))}>
           −
@@ -159,22 +160,22 @@ export function OperatorPage() {
   };
 
   return (
-    <div className="flex min-h-full flex-col gap-5 p-5">
+    <div className="flex min-h-full flex-col gap-3 p-3 sm:gap-5 sm:p-5">
       {!connected && (
         <div className="rounded-xl bg-amber-500 px-4 py-3 text-xl font-semibold text-black">{t.common.connectionLost}</div>
       )}
       <header className="flex items-baseline justify-between gap-4">
-        <h1 className="text-4xl font-bold">{machine.name}</h1>
-        <span className="text-2xl text-slate-400">{shift ? `${t.operator.shift}: ${shift.name}` : ""}</span>
+        <h1 className="text-2xl font-bold sm:text-4xl">{machine.name}</h1>
+        <span className="text-lg text-slate-400 sm:text-2xl">{shift ? `${t.operator.shift}: ${shift.name}` : ""}</span>
       </header>
 
-      <section className="rounded-3xl p-8 text-white" style={{ backgroundColor: stateColor(state) }}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="text-7xl font-extrabold uppercase tracking-wide">{stateLabel(state)}</div>
-          <div className="tabular text-7xl font-bold">{formatDuration(seconds)}</div>
+      <section className="rounded-3xl p-5 text-white sm:p-8" style={{ backgroundColor: stateColor(state) }}>
+        <div className="flex flex-wrap items-center justify-between gap-x-4">
+          <div className="text-5xl font-extrabold uppercase tracking-wide sm:text-7xl">{stateLabel(state)}</div>
+          <div className="tabular text-5xl font-bold sm:text-7xl">{formatDuration(seconds)}</div>
         </div>
         {isDown && live.reason && (
-          <div className="mt-3 text-3xl font-semibold">
+          <div className="mt-3 text-2xl font-semibold sm:text-3xl">
             {t.operator.reasonSet}: {live.reason.name}
           </div>
         )}
@@ -198,7 +199,7 @@ export function OperatorPage() {
       ) : needsReason || panel === "reason" ? (
         <ReasonPicker reasons={reasons ?? []} onPick={pickReason} onClose={needsReason ? undefined : () => setPanel("none")} />
       ) : (
-        <section className="grid grid-cols-2 gap-5 xl:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
           <Metric label={t.operator.program} value={live.program ?? "—"} />
           <Metric
             label={`${t.operator.fact} / ${t.operator.plan}`}
@@ -206,11 +207,11 @@ export function OperatorPage() {
           />
           <Metric label={t.operator.planShift} value={shift?.plan_shift != null ? String(shift.plan_shift) : "—"} />
           <Metric label={t.operator.oee} value={percent(shift?.oee)} />
-          <Metric label={t.operator.lastCycle} {...lastCycleMetric(live.last_cycle)} />
+          <Metric label={t.operator.lastCycle} wide {...lastCycleMetric(live.last_cycle)} />
         </section>
       )}
 
-      <footer className="mt-auto grid grid-cols-2 gap-5 xl:grid-cols-4">
+      <footer className="mt-auto grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
         <button
           className={`${bigButton} bg-slate-700 text-white`}
           disabled={!isDown}
