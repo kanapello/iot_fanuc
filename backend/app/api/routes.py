@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +29,7 @@ from app.api.deps import (
     require_machine,
     time_range,
 )
+from app.api.security import LoginGuard, client_ip
 from app.core.access import (
     ANALYTICS_VIEW,
     COLLECTORS_VIEW,
@@ -64,8 +65,8 @@ def _ids(machines: list[dict[str, Any]]) -> list[int]:
 
 
 class LoginIn(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=200)
 
 
 @router.get("/health", tags=["system"])
@@ -74,10 +75,21 @@ async def health() -> dict[str, str]:
 
 
 @router.post("/auth/login", tags=["auth"])
-async def auth_login(body: LoginIn, session: Session, settings: SettingsDep) -> dict[str, str]:
+async def auth_login(body: LoginIn, request: Request, session: Session, settings: SettingsDep) -> dict[str, str]:
+    """Sign in. More than ``login_max_failures`` failures within the window from one address for one
+    login: 429 until the window ends, even with the right password."""
+    guard = LoginGuard(request.app.state.redis, settings.login_max_failures, settings.login_failure_window_s)
+    ip = client_ip(request)
+    wait_s = await guard.retry_after(ip, body.username)
+    if wait_s is not None:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "too many failed logins, try again later", {"Retry-After": str(wait_s)}
+        )
     token = await identity.login(session, settings, body.username, body.password)
     if token is None:
+        await guard.failed(ip, body.username)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "wrong username or password")
+    await guard.succeeded(ip, body.username)
     return {"token": token}
 
 

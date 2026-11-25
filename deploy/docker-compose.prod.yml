@@ -1,0 +1,97 @@
+# Production on a cloud VM (ADR 0010), on top of docker-compose.yml. Through the Makefile:
+#   make env-prod domain=mm.example.com email=ops@example.com   # once: .env with random passwords
+#   make prod-up
+# Open to the internet: 80 and 443 (Caddy: HTTPS by Let's Encrypt for MM_DOMAIN) and 8883 (MQTT over
+# TLS for collectors). The database, Redis, the API, the web container and the plain MQTT port 1883
+# stay inside the compose network. No simulators (they are in the "dev" profile), no demo data.
+# Needs Docker Compose 2.24 or newer (!reset).
+
+x-prod-env: &prod-env
+  MM_ENV: prod  # the server refuses to start with the secrets of .env.example
+  MM_DEMO_DATA: "false"
+  MM_PUBLIC_URL: https://${MM_DOMAIN:?set MM_DOMAIN in .env (make env-prod)}
+
+services:
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"    # Let's Encrypt HTTP challenge, redirect to HTTPS
+      - "443:443"
+    environment:
+      MM_DOMAIN: ${MM_DOMAIN:?set MM_DOMAIN in .env}
+      MM_ACME_EMAIL: ${MM_ACME_EMAIL:?set MM_ACME_EMAIL in .env}
+      MM_TLS_ISSUER: ${MM_TLS_ISSUER:-acme}  # internal: Caddy's own CA, for a test stand only
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data  # certificates; Mosquitto reads them
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+
+  mosquitto:
+    ports:
+      - "8883:8883"
+    environment:
+      MM_ENV: prod
+      MM_MQTT_TLS_DOMAIN: ${MM_DOMAIN:?set MM_DOMAIN in .env}
+      MM_MQTT_CERT_CHECK_S: ${MM_MQTT_CERT_CHECK_S:-3600}  # how often a renewed certificate is looked for
+      # real collectors only: <collector_id>:<org>:<site>:<password>[,...], no simulator accounts
+      MM_MQTT_COLLECTORS: ${MM_MQTT_COLLECTORS:-}
+    volumes:
+      - caddy-data:/caddy-data:ro
+
+  migrate:
+    environment: *prod-env
+  ingest:
+    environment: *prod-env
+  worker:
+    environment: *prod-env
+  api:
+    environment: *prod-env
+
+  web:
+    ports: !reset []  # behind Caddy only
+
+  # Nightly pg_dump to S3-compatible storage, kept MM_BACKUP_KEEP_DAYS days; also the tool for
+  # `make backup-now`, `make restore-check` and `make restore` (docs/runbooks/cloud-install.md).
+  backup:
+    build:
+      context: ..
+      dockerfile: deploy/backup/Dockerfile
+      # the CA of a TLS-inspecting proxy is not needed: nothing is downloaded while building
+    image: machine-monitor/backup:dev
+    restart: unless-stopped
+    environment: &backup-env
+      PGHOST: db
+      PGUSER: ${MM_DB_USER}
+      PGPASSWORD: ${MM_DB_PASSWORD}
+      PGDATABASE: ${MM_DB_NAME}
+      MM_BACKUP_S3_ENDPOINT: ${MM_BACKUP_S3_ENDPOINT:-}
+      MM_BACKUP_S3_REGION: ${MM_BACKUP_S3_REGION:-us-east-1}
+      MM_BACKUP_S3_BUCKET: ${MM_BACKUP_S3_BUCKET:-}
+      MM_BACKUP_S3_ACCESS_KEY: ${MM_BACKUP_S3_ACCESS_KEY:-}
+      MM_BACKUP_S3_SECRET_KEY: ${MM_BACKUP_S3_SECRET_KEY:-}
+      MM_BACKUP_S3_PREFIX: ${MM_BACKUP_S3_PREFIX:-machine-monitor}
+      MM_BACKUP_TIME: ${MM_BACKUP_TIME:-23:30}  # UTC: 02:30 Moscow time
+      MM_BACKUP_KEEP_DAYS: ${MM_BACKUP_KEEP_DAYS:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # A clean, throwaway database for `make restore-check`; started only by that command.
+  restore-check-db:
+    image: timescale/timescaledb:2.32.0-pg16
+    profiles: ["tools"]
+    environment:
+      POSTGRES_DB: ${MM_DB_NAME}
+      POSTGRES_USER: ${MM_DB_USER}
+      POSTGRES_PASSWORD: ${MM_DB_PASSWORD}
+    # its anonymous volume is removed after the check; it needs free disk of about the size of the database
+
+volumes:
+  caddy-data:
+  caddy-config:

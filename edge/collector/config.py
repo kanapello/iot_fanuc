@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
 
@@ -22,11 +22,26 @@ class _Model(BaseModel):
 
 class MqttConfig(_Model):
     host: str
-    port: int = 1883
-    tls: bool = False
+    # TLS by default: the broker of a cloud server is reached over the internet (ADR 0010). The server
+    # certificate is checked against the system root CAs; ``ca_file`` replaces them with an own CA
+    # (a self-signed test certificate, a corporate CA). Plain MQTT only inside the server's own network.
+    tls: bool = True
+    port: int = Field(default=0, ge=0, le=65535)  # 0: 8883 with TLS, 1883 without
+    ca_file: str | None = None
     username: str | None = None
     password_env: str | None = None
     keepalive_s: int = 30
+
+    @model_validator(mode="after")
+    def _port_and_ca(self) -> MqttConfig:
+        if self.port == 0:
+            self.port = 8883 if self.tls else 1883
+        if self.ca_file is not None:
+            if not self.tls:
+                raise ValueError("ca_file needs tls: true")
+            if not Path(self.ca_file).is_file():
+                raise ValueError(f"ca_file not found: {self.ca_file}")
+        return self
 
 
 class FocasConfig(_Model):

@@ -135,9 +135,10 @@ org: demo
 site: plant1
 collector_id: edge-shop1
 mqtt:
-  host: mm-server.local
-  port: 8883
-  tls: true
+  host: mm.example.com              # домен сервера (MM_DOMAIN)
+  port: 8883                        # по умолчанию 8883 при TLS, 1883 без
+  tls: true                         # по умолчанию; сертификат проверяется по системным корневым (ADR 0010)
+  # ca_file: ./ca.crt               # свой CA вместо системных (самоподписанный стенд)
   username: edge-shop1
   password_env: MM_MQTT_PASSWORD
 focas:
@@ -221,7 +222,10 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 ## 5. Контур 2 — Приём и хранение
 
 ### 5.1. Mosquitto
-- TLS (порт 8883, этап эксплуатации). У каждого коллектора своя учётная запись (`MM_MQTT_COLLECTORS`);
+- Коллекторы подключаются по TLS на 8883 (prod, ADR 0010): сертификат — тот же, что Caddy получил для домена
+  (Mosquitto читает его из тома Caddy и перечитывает продлённый по SIGHUP). 1883 без TLS — только внутри сети
+  compose (`ingest`, симуляторы). В prod пароли `change-me…` не принимаются.
+- У каждого коллектора своя учётная запись (`MM_MQTT_COLLECTORS`);
   ACL разрешает ему запись только в `mm/v1/{org}/{site}/+/telemetry|event` своей площадки и в свой heartbeat,
   чтение — ничего. Backend — только читает.
 - Persistence включён, `autosave_interval 5`: при аварийном падении брокера теряются не более 5 последних
@@ -412,6 +416,10 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
   `GET /admin/areas/{id}/passports.pdf` — лист A4 наклеек участка. Адрес на наклейке — `MM_PUBLIC_URL`, иначе адрес
   запроса (`X-Forwarded-Host` / `X-Forwarded-Proto` от nginx).
 - WebSocket `/ws/live?token=...` — изменения live-состояния станков из области доступа.
+- Вход: больше 5 неудачных попыток за минуту по паре адрес + логин — 429 (счёт в Redis; адрес — `X-Real-IP`
+  от прокси перед API). У всех ответов — `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`. При `MM_ENV=prod` процессы backend не стартуют со значениями из `.env.example`
+  (ADR 0010).
 - Аутентификация: вход по логину и паролю (JWT); пользователи и роли в БД (п. 7.3). Суперадмин создаётся при
   первом старте из `.env`. Киоск — device-токен, привязанный к одному станку (экран оператора) или одному
   участку (ТВ-дашборд); в БД хранится только хеш, токен выдаёт и отзывает администратор.
@@ -471,15 +479,27 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | `db` | timescale/timescaledb:2.32.0-pg16 (версия закреплена) | — |
 | `redis` | redis:7-alpine (кэш, без сохранения на диск) | — |
 | `migrate` | backend (alembic upgrade head) | — |
-| `api` | backend (`uvicorn`) | — |
+| `api` | backend (`python -m app.api`: проверка настроек, затем uvicorn) | — |
 | `ingest` | backend (`python -m app.ingest`) | — |
 | `worker` | backend (`python -m app.worker`) | — |
 | `web` | frontend (nginx, static + reverse proxy `/api`, `/ws`) | — |
 | `simulator-a`, `simulator-b` | edge (driver=simulator), два коллектора на двух площадках демо-организации | `dev` |
 
 Конфиг через `.env` (пример — `.env.example`); адрес интерфейса для QR-наклеек — `MM_PUBLIC_URL`. Тома для БД,
-брокера и буферов симуляторов.
-Запланировано (этап 6), пока нет: `prometheus` и `grafana` (профиль `monitoring`), `backup` — pg_dump по расписанию.
+брокера и буферов симуляторов. Наружу опубликован только `web` (`MM_WEB_PORT`).
+
+**Prod — `deploy/docker-compose.prod.yml` поверх основного** (ADR 0010, `docs/runbooks/cloud-install.md`): `make env-prod`
+создаёт `.env` со случайными паролями, `make prod-up` поднимает стек без профиля `dev` (без симуляторов),
+с `MM_ENV=prod`, `MM_DEMO_DATA=false`, `MM_PUBLIC_URL=https://MM_DOMAIN`. Добавляются:
+
+| Сервис | Образ | Назначение |
+|---|---|---|
+| `caddy` | caddy:2.11.9-alpine | HTTPS для `MM_DOMAIN` (Let's Encrypt, продление само), 80 → 443; `/api/*`, `/ws/*` — в API, остальное — в `web` |
+| `backup` | `deploy/backup/Dockerfile` (TimescaleDB 2.32.0-pg16 + rclone 1.76.0) | ночной `pg_dump` в S3-совместимое хранилище, хранение 30 дней; `make backup-now`, `restore`, `restore-check` |
+| `restore-check-db` | timescale/timescaledb:2.32.0-pg16, профиль `tools` | временная чистая база для `make restore-check` |
+
+Наружу в prod — только 80 и 443 (Caddy) и 8883 (Mosquitto, TLS). «Демо-предприятие» миграций удаляется
+`make prod-drop-demo`. Запланировано (этап 6), пока нет: `prometheus` и `grafana` (профиль `monitoring`).
 
 ### 8.2. Edge
 Коллектор, конфиг `config.yaml`, том для буфера; образ — `edge/Dockerfile` (Linux). Сеть коллектора и проверка
@@ -490,7 +510,10 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 - Сеть станков (OT) отделена от офисной (IT). Коллектор стоит на границе: FOCAS — в OT, MQTT — исходящее соединение в сторону сервера.
   Коллектор ставится в сеть станков или в подсеть, откуда открыт TCP 8193 до стоек; VPN и туннельных программ
   на его ПК нет (`docs/runbooks/collector-network.md`).
-- Наружу с сервера открыты только 443 (web) и 8883 (MQTT для коллекторов).
+- Наружу с сервера (prod) открыты только 80 и 443 (Caddy, HTTPS) и 8883 (MQTT по TLS для коллекторов); БД, Redis,
+  API, web и 1883 — только внутри сети compose.
+- Необходимый минимум (ADR 0010): отказ старта со значениями паролей из `.env.example`, ограничение попыток входа,
+  заголовки безопасности, токен киоска убирается из адресной строки, ночные бэкапы с проверкой восстановления.
 - Секреты — в `.env` / переменных окружения, не в git.
 - Изоляция клиентов — фильтром по области доступа в API. Row-level security в БД, журнал входов сервисных
   инженеров и согласие клиента на доступ сервиса не делаются на этом этапе.
@@ -509,6 +532,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 |---|---|
 | Edge | Python 3.12, ctypes (FOCAS2), paho-mqtt, SQLite, pydantic (PyInstaller для Windows — запланирован) |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), asyncpg, Alembic, pydantic v2, aiomqtt, redis-py, reportlab (PDF-наклейки) |
+| Развёртывание (prod) | Docker Compose, Caddy 2.11 (HTTPS, Let's Encrypt), rclone (бэкапы в S3) |
 | БД | PostgreSQL 16 + TimescaleDB, Redis 7 |
 | Брокер | Mosquitto 2 |
 | Frontend | React 18, TypeScript, Vite, TanStack Query, react-router-dom, Tailwind CSS, ECharts |
@@ -552,10 +576,14 @@ machine-monitor/
 │   └── schemas/              # JSON Schema сообщений MQTT (контракт)
 ├── deploy/
 │   ├── docker-compose.yml
+│   ├── docker-compose.prod.yml  # облачная VM: Caddy, MQTT по TLS, бэкапы (ADR 0010)
+│   ├── caddy/                # Caddyfile
+│   ├── backup/               # образ и скрипт бэкапов (pg_dump → S3, restore, restore-check)
+│   ├── scripts/              # env-prod.sh, drop-demo.sql
 │   └── mosquitto/
 └── docs/
     ├── adr/                  # архитектурные решения
-    └── runbooks/             # быстрый старт, сеть коллектора, первая стойка
+    └── runbooks/             # быстрый старт, сеть коллектора, первая стойка, установка на облачную VM
 ```
 
 ---

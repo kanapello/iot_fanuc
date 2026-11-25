@@ -83,6 +83,27 @@ jobs:
       - name: build (tsc + vite)
         run: pnpm build
 
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: shell scripts
+        run: shellcheck -s sh deploy/mosquitto/docker-entrypoint.sh deploy/backup/mm-backup.sh deploy/scripts/env-prod.sh
+      - name: compose files (dev, prod)
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env -f deploy/docker-compose.yml --profile dev config -q
+          rm .env
+          sh deploy/scripts/env-prod.sh mm.example.com ops@example.com
+          docker compose --env-file .env -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml config -q
+      - name: Caddyfile
+        run: >
+          docker run --rm -e MM_DOMAIN=mm.example.com -e MM_ACME_EMAIL=ops@example.com
+          -v "$PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.9-alpine
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
   images:
     name: image (${{ matrix.image }})
     runs-on: ubuntu-latest
@@ -97,6 +118,8 @@ jobs:
             file: frontend/Dockerfile
           - image: edge
             file: edge/Dockerfile
+          - image: backup
+            file: deploy/backup/Dockerfile
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4

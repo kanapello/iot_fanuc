@@ -12,6 +12,7 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.redis import RedisContainer
 
 from alembic import command
 from app.core.db import create_engine, create_session_factory
@@ -21,6 +22,7 @@ from app.ingest.service import IngestService
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 SCHEMAS_DIR = BACKEND_DIR.parent / "shared" / "schemas"
 TIMESCALE_IMAGE = "timescale/timescaledb:2.32.0-pg16"
+REDIS_IMAGE = "redis:7-alpine"
 
 DEFAULT_RULES = {
     "offline_timeout_s": 30,
@@ -84,6 +86,13 @@ def encode(body: dict[str, Any], org: str = "torg", site: str = "t1") -> tuple[s
 @pytest.fixture(scope="session")
 def validator() -> MessageValidator:
     return MessageValidator(SCHEMAS_DIR)
+
+
+@pytest.fixture(scope="session")
+def redis_url() -> Iterator[str]:
+    """Real Redis, as in production (cache, live state, login limits)."""
+    with RedisContainer(REDIS_IMAGE) as container:
+        yield f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
 
 
 @pytest.fixture(scope="session")

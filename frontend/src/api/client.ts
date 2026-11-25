@@ -2,9 +2,15 @@
 
 const TOKEN_KEY = "mm_token";
 
-// Kiosks and TV dashboards are opened as <page>?token=<device token>.
-const urlToken = new URLSearchParams(window.location.search).get("token");
-if (urlToken) localStorage.setItem(TOKEN_KEY, urlToken);
+// Kiosks and TV dashboards are opened as <page>?token=<device token>. The token is kept in localStorage
+// and taken out of the address bar at once, so it is not left in the history or shown on the screen.
+const pageUrl = new URL(window.location.href);
+const urlToken = pageUrl.searchParams.get("token");
+if (urlToken) {
+  localStorage.setItem(TOKEN_KEY, urlToken);
+  pageUrl.searchParams.delete("token");
+  window.history.replaceState(window.history.state, "", `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+}
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (token: string | null) =>

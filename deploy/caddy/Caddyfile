@@ -1,0 +1,31 @@
+# Reverse proxy of the production stack (ADR 0010).
+# HTTPS for MM_DOMAIN with a certificate from Let's Encrypt, obtained and renewed by Caddy itself;
+# Mosquitto serves MQTT over TLS (8883) with the same certificate, read from Caddy's data volume.
+# MM_TLS_ISSUER=internal makes Caddy issue the certificate from its own CA (a test stand without
+# a public domain); collectors then need that CA as ca_file.
+{
+	email {$MM_ACME_EMAIL}
+	servers {
+		protocols h1 h2  # TCP 443 only: no HTTP/3 over UDP
+	}
+}
+
+{$MM_DOMAIN} {
+	tls {
+		issuer {$MM_TLS_ISSUER:acme}
+	}
+
+	# Straight to the API. It counts failed logins by the address set here: Caddy ignores
+	# X-Forwarded-* of clients, and {remote_host} is the address the connection came from.
+	@api path /api/* /ws/*
+	handle @api {
+		reverse_proxy api:8000 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# The web interface (static files of the web container)
+	handle {
+		reverse_proxy web:80
+	}
+}

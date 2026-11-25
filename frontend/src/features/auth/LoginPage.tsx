@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, setToken } from "../../api/client";
+import { api, ApiError, setToken } from "../../api/client";
 import { t } from "../../shared/i18n";
 
 /** Where to go after signing in: only a page of this site (a QR sticker sends back to /m/<code>). */
@@ -11,7 +11,7 @@ function nextPath(): string {
 export function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -19,8 +19,8 @@ export function LoginPage() {
       const result = await api<{ token: string }>("/auth/login", { method: "POST", body: { username, password } });
       setToken(result.token);
       window.location.assign(nextPath());
-    } catch {
-      setError(true);
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 429 ? t.login.tooMany : t.login.failed);
     }
   };
 
@@ -51,7 +51,7 @@ export function LoginPage() {
             autoComplete="current-password"
           />
         </label>
-        {error && <p className="text-sm text-red-400">{t.login.failed}</p>}
+        {error && <p className="text-sm text-red-400">{error}</p>}
         <button className="w-full rounded bg-sky-600 py-3 text-lg font-semibold hover:bg-sky-500">{t.login.submit}</button>
         <p className="text-xs text-slate-500">{t.login.hint}</p>
       </form>

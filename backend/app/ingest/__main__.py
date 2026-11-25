@@ -7,7 +7,7 @@ import contextlib
 import logging
 import signal
 
-from app.core.config import get_settings
+from app.core.config import checked_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
 from app.ingest.consumer import run_forever
@@ -18,7 +18,7 @@ log = logging.getLogger("app.ingest")
 
 
 async def main() -> None:
-    settings = get_settings()
+    settings = checked_settings()
     setup_logging(settings.log_level)
     engine = create_engine(settings.database_url)
     service = IngestService(

@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.admin import service as admin
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, checked_settings
 from app.core.db import create_engine, create_session_factory
 from app.core.logging import setup_logging
 from app.ingest.health import find_seq_gaps
@@ -152,7 +152,7 @@ async def main() -> None:
     recalc_parser.add_argument("--to", dest="end", default=None, type=_parse_ts)
     args = parser.parse_args()
 
-    settings = get_settings()
+    settings = checked_settings()
     setup_logging(settings.log_level)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)

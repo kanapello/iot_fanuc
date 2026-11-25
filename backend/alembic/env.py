@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
-from app.core.config import get_settings
+from app.core.config import checked_settings
 from app.core.db import Base
 from app.ingest import models as _ingest_models  # noqa: F401
 
@@ -21,7 +21,7 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return config.get_main_option("sqlalchemy.url") or get_settings().database_url
+    return config.get_main_option("sqlalchemy.url") or checked_settings().database_url
 
 
 def run_migrations_offline() -> None:
