@@ -2,6 +2,12 @@ import { useState } from "react";
 import { api, setToken } from "../../api/client";
 import { t } from "../../shared/i18n";
 
+/** Where to go after signing in: only a page of this site (a QR sticker sends back to /m/<code>). */
+function nextPath(): string {
+  const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+  return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+}
+
 export function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -12,7 +18,7 @@ export function LoginPage() {
     try {
       const result = await api<{ token: string }>("/auth/login", { method: "POST", body: { username, password } });
       setToken(result.token);
-      window.location.assign(new URLSearchParams(window.location.search).get("next") ?? "/");
+      window.location.assign(nextPath());
     } catch {
       setError(true);
     }
@@ -25,11 +31,25 @@ export function LoginPage() {
         <h1 className="text-2xl font-semibold">{t.app.title}</h1>
         <label className="block space-y-1">
           <span className="text-sm text-slate-400">{t.login.username}</span>
-          <input className={input} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+          <input
+            className={input}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect="off"
+            autoComplete="username"
+          />
         </label>
         <label className="block space-y-1">
           <span className="text-sm text-slate-400">{t.login.password}</span>
-          <input className={input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input
+            className={input}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
         </label>
         {error && <p className="text-sm text-red-400">{t.login.failed}</p>}
         <button className="w-full rounded bg-sky-600 py-3 text-lg font-semibold hover:bg-sky-500">{t.login.submit}</button>

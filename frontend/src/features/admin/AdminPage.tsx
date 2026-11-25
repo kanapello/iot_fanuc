@@ -4,6 +4,7 @@ import { api, query, type Machine, type Me } from "../../api/client";
 import { t } from "../../shared/i18n";
 import { useMe } from "../../shared/session";
 import { firstNode, inputClass, NodeForm, type NodeValue } from "./NodeForm";
+import { AreaStickersAction, MachinePassportActions, type Report } from "./PassportActions";
 import { TokensPanel } from "./TokensPanel";
 import { UsersPanel } from "./UsersPanel";
 
@@ -26,6 +27,8 @@ interface Tab {
   columns?: Column[];
   blank?: Row;
   canCreate?: boolean;
+  hint?: string;
+  rowActions?: (row: Row, report: Report) => React.ReactNode; // extra buttons of a row its user may edit
 }
 
 const c = t.admin.col;
@@ -54,8 +57,11 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
         resource: "machines",
         node: "site",
         canCreate: false,
+        hint: t.admin.passport.hint,
+        rowActions: (row, report) => <MachinePassportActions row={row} report={report} />,
         columns: [
           { key: "code", label: c.id, type: "readonly" },
+          { key: "passport_code", label: c.passport, type: "readonly" },
           { key: "name", label: c.name, type: "text" },
           { key: "area_id", label: c.area, type: "select", options: areaOptions },
           { key: "controller_type", label: c.controller, type: "text" },
@@ -70,6 +76,7 @@ function buildTabs(me: Me, node: NodeValue, rows: { reasons: Row[]; machines: Ma
         resource: "areas",
         node: "site",
         blank: { name: "" },
+        rowActions: (row, report) => <AreaStickersAction row={row} report={report} />,
         columns: [{ key: "name", label: c.name, type: "text" }],
       },
       {
@@ -259,6 +266,11 @@ function CrudTable({ tab, node }: { tab: Tab; node: NodeValue }) {
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [draft, setDraft] = useState<Row>({});
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const report: Report = (message, isError = false) => {
+    setError(isError ? message : "");
+    setNotice(isError ? "" : message);
+  };
 
   const nodeFields: Row =
     tab.node === "site" ? { site_id: node.site_id } : tab.node === "none" ? {} : { org_id: node.org_id, site_id: tab.node === "org" ? undefined : node.site_id };
@@ -321,6 +333,7 @@ function CrudTable({ tab, node }: { tab: Tab; node: NodeValue }) {
             </span>
           ) : row._editable ? (
             <span className="space-x-2">
+              {tab.rowActions?.(row, report)}
               <button className={button} onClick={() => start(row)}>
                 {t.common.edit}
               </button>
@@ -341,6 +354,8 @@ function CrudTable({ tab, node }: { tab: Tab; node: NodeValue }) {
   return (
     <div className="rounded-xl bg-slate-900 p-4">
       {error && <p className="mb-2 rounded bg-red-900/60 px-3 py-2 text-sm text-red-200">{error}</p>}
+      {notice && <p className="mb-2 rounded bg-green-900/60 px-3 py-2 text-sm text-green-100">{notice}</p>}
+      {tab.hint && <p className="mb-2 text-sm text-slate-400">{tab.hint}</p>}
       <table className="w-full text-sm">
         <thead className="text-left text-slate-400">
           <tr>
