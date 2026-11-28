@@ -4,6 +4,7 @@ import { api, type Live, type Machine } from "../../api/client";
 import { t } from "../../shared/i18n";
 import { NodePicker, useMe, useNodeSelection } from "../../shared/session";
 import { formatDuration, percent, stateColor, stateLabel } from "../../shared/states";
+import { useShellNode } from "../../shared/Shell";
 import { useLive, useNow } from "../../shared/useLive";
 
 function Tile({ machine, live, now }: { machine: Machine; live: Live | undefined; now: number }) {
@@ -44,36 +45,25 @@ function Tile({ machine, live, now }: { machine: Machine; live: Live | undefined
   );
 }
 
-export function DashboardPage() {
-  const { areaId: areaParam } = useParams();
-  const { data: me } = useMe();
-  const selection = useNodeSelection(me?.sites);
+function Board({ siteId, areaId, header }: { siteId: number | null; areaId: number | null; header?: React.ReactNode }) {
   const { data: machines } = useQuery({ queryKey: ["machines"], queryFn: () => api<Machine[]>("/machines") });
   const { machines: live, connected } = useLive();
   const now = useNow();
 
-  // an area in the address (TV dashboard) wins over the picker
-  const areaId = areaParam ? Number(areaParam) : selection.areaId;
-  const visible = (machines ?? []).filter(
-    (m) => (areaId ? m.area_id === areaId : !selection.siteId || m.site_id === selection.siteId),
-  );
+  const visible = (machines ?? []).filter((m) => (areaId ? m.area_id === areaId : !siteId || m.site_id === siteId));
   const groups = [
     ...new Map(visible.map((m) => [`${m.site_id}:${m.area_id}`, { site: m.site_name, area: m.area_name ?? "" }])).entries(),
   ];
   const manySites = new Set(visible.map((m) => m.site_id)).size > 1;
 
   return (
-    <div className="min-h-full p-5">
+    <>
       {!connected && (
         <div className="mb-4 rounded-lg bg-amber-500 px-4 py-2 text-lg font-semibold text-black">
           {t.common.connectionLost}
         </div>
       )}
-      {!areaParam && me && (
-        <div className="mb-4">
-          <NodePicker sites={me.sites} selection={selection} large />
-        </div>
-      )}
+      {header}
       {!machines && <p className="text-2xl text-slate-400">{t.common.loading}</p>}
       {machines && !visible.length && <p className="text-2xl text-slate-400">{t.common.noData}</p>}
       {groups.map(([key, { site, area }]) => (
@@ -88,6 +78,36 @@ export function DashboardPage() {
           </div>
         </section>
       ))}
+    </>
+  );
+}
+
+/** Shop-floor TV (and its area link): full screen, no menu, own site and area pickers. */
+export function DashboardPage() {
+  const { areaId: areaParam } = useParams();
+  const { data: me } = useMe();
+  const selection = useNodeSelection(me?.sites);
+  // an area in the address (TV dashboard) wins over the picker
+  const areaId = areaParam ? Number(areaParam) : selection.areaId;
+  return (
+    <div className="min-h-full p-5">
+      <Board
+        siteId={areaParam ? null : selection.siteId}
+        areaId={areaId}
+        header={
+          !areaParam && me ? (
+            <div className="mb-4">
+              <NodePicker sites={me.sites} selection={selection} large />
+            </div>
+          ) : null
+        }
+      />
     </div>
   );
+}
+
+/** "Machines" inside the application frame: the same tiles, site and area from the top of the screen. */
+export function MachinesPage() {
+  const { siteId, areaId } = useShellNode();
+  return <Board siteId={siteId} areaId={areaId} />;
 }

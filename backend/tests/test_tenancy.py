@@ -284,6 +284,10 @@ def foreign_calls(w: World) -> dict[tuple[str, str], list[Call]]:
             Call("/oee", "empty", params={"site_id": a.site_id, "period": "hour", **period}),
         ],
         ("GET", "/reports/pareto"): [Call("/reports/pareto", "empty", params=aimed)],
+        ("GET", "/overview"): [
+            Call("/overview", "hidden", params={"site_id": a.site_id, "period": "today"}),
+            Call("/overview", "hidden", params={"site_id": a.site_id, "machine_id": m, "period": "30d"}),
+        ],
         ("GET", "/annotations"): [
             Call("/annotations", "empty", params=aimed),
             Call("/annotations", "clean", params=period),
@@ -547,6 +551,9 @@ async def test_master_sees_own_area_engineer_sees_whole_site(world: World) -> No
         assert {r["machine_id"] for r in rows} == {m1}
         intervals = (await http.get("/timeline", params={"from": FROM})).json()["intervals"]
         assert {i["machine_id"] for i in intervals} == {m1}
+        overview = (await http.get("/overview", params={"site_id": world.a1.site_id, "period": "today"})).json()
+        assert {m["machine_id"] for m in overview["machines"]} == {m1}
+        assert (await http.get("/overview", params={"site_id": world.a2.site_id})).status_code == 404
         # a master corrects downtime reasons of the area, but does not edit norms or structure
         assert (await http.delete(f"/annotations/{world.ids['annotation_a']}")).status_code == 204
         program = {"org_id": world.a1.org_id, "site_id": world.a1.site_id, "program": "O7", "ideal_cycle_time_s": 10}

@@ -479,3 +479,67 @@ async def setup_active(session: AsyncSession, machine_id: int) -> bool:
         text("SELECT 1 FROM operator_setup_marks WHERE machine_id = :m AND end_ts IS NULL LIMIT 1"), {"m": machine_id}
     )
     return result.first() is not None
+
+
+Span = tuple[datetime, datetime]
+
+
+def _span_params(spans: Sequence[Span]) -> dict[str, Any]:
+    return {"n": list(range(len(spans))), "starts": [s for s, _ in spans], "ends": [e for _, e in spans]}
+
+
+async def state_seconds(
+    session: AsyncSession, machine_ids: Collection[int], spans: Sequence[Span], now: datetime
+) -> dict[tuple[int, int], dict[str, float]]:
+    """Seconds per state of each machine inside each span: {(span index, machine): {state: seconds}}.
+
+    One query for any number of spans; an open interval lasts until ``now``.
+
+    Relies on the intervals of one machine never overlapping (``_store_intervals`` keeps them a chain):
+    for a span, only the intervals that start inside it and the single last one that starts before it
+    can cover it. Both are found through the index (machine_id, start_ts) without reading the history
+    before the span, so the time does not grow with the age of the installation.
+    """
+    if not machine_ids or not spans:
+        return {}
+    rows = await session.execute(
+        text(
+            "SELECT p.n, i.machine_id, i.state, sum(EXTRACT(EPOCH FROM LEAST(COALESCE(i.end_ts, :now), p.end_ts) "
+            "- GREATEST(i.start_ts, p.start_ts))) AS seconds "
+            "FROM unnest(CAST(:n AS integer[]), CAST(:starts AS timestamptz[]), CAST(:ends AS timestamptz[])) "
+            "AS p(n, start_ts, end_ts) "
+            "CROSS JOIN unnest(CAST(:ids AS bigint[])) AS mm(id) "
+            "CROSS JOIN LATERAL ("
+            "(SELECT machine_id, state, start_ts, end_ts FROM state_intervals "
+            "WHERE machine_id = mm.id AND start_ts < p.start_ts ORDER BY start_ts DESC LIMIT 1) "
+            "UNION ALL "
+            "(SELECT machine_id, state, start_ts, end_ts FROM state_intervals "
+            "WHERE machine_id = mm.id AND start_ts >= p.start_ts AND start_ts < p.end_ts)) i "
+            "WHERE COALESCE(i.end_ts, :now) > p.start_ts "
+            "GROUP BY p.n, i.machine_id, i.state"
+        ),
+        {**_span_params(spans), "ids": list(machine_ids), "now": now},
+    )
+    result: dict[tuple[int, int], dict[str, float]] = {}
+    for r in rows:
+        result.setdefault((r.n, r.machine_id), {})[r.state] = max(float(r.seconds), 0.0)
+    return result
+
+
+async def part_totals(
+    session: AsyncSession, machine_ids: Collection[int], spans: Sequence[Span]
+) -> dict[tuple[int, int], int]:
+    """Parts made by each machine inside each span: {(span index, machine): parts}."""
+    if not machine_ids or not spans:
+        return {}
+    rows = await session.execute(
+        text(
+            "SELECT p.n, e.machine_id, sum(e.delta) AS parts "
+            "FROM unnest(CAST(:n AS integer[]), CAST(:starts AS timestamptz[]), CAST(:ends AS timestamptz[])) "
+            "AS p(n, start_ts, end_ts) "
+            "JOIN part_events e ON e.machine_id = ANY(:ids) AND e.ts >= p.start_ts AND e.ts < p.end_ts "
+            "GROUP BY p.n, e.machine_id"
+        ),
+        {**_span_params(spans), "ids": list(machine_ids)},
+    )
+    return {(r.n, r.machine_id): int(r.parts) for r in rows}

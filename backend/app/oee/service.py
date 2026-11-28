@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import journal
 from app.admin import service as admin
-from app.oee.calc import NormTable, OeeResult, aggregate, compute_oee
+from app.oee.calc import SUM_FIELDS, NormTable, OeeResult, aggregate, compute_oee
 from app.oee.dirty import mark_oee_dirty, take_oee_dirty
 from app.oee.shifts import Shift, ShiftTemplate, clip, shift_instances
 from app.timeline import service as timeline
@@ -177,3 +178,33 @@ async def query(
             {"machine_id": machine_id, "period_start": p0, "period_end": p1, "label": label, **aggregate(items)}
         )
     return sorted(result, key=lambda r: (r["period_start"], r["machine_id"] or ""))
+
+
+async def component_sums(
+    session: AsyncSession, machine_ids: Collection[int], spans: Sequence[tuple[datetime, datetime]]
+) -> dict[tuple[int, int], dict[str, Any]]:
+    """Summed components of ``oee_hourly`` per span and machine: {(span index, machine): row}.
+
+    An hour belongs to the span that holds its start. Hours outside shifts have no rows, so a span
+    without planned time is simply missing. Ratios are derived from the sums (``calc.aggregate``),
+    never averaged from hourly percentages.
+    """
+    if not machine_ids or not spans:
+        return {}
+    sums = ", ".join(f"sum(h.{name}) AS {name}" for name in SUM_FIELDS)
+    rows = await session.execute(
+        text(
+            f"SELECT p.n, h.machine_id, {sums}, bool_or(h.no_standard) AS no_standard "
+            "FROM unnest(CAST(:n AS integer[]), CAST(:starts AS timestamptz[]), CAST(:ends AS timestamptz[])) "
+            "AS p(n, start_ts, end_ts) "
+            "JOIN oee_hourly h ON h.machine_id = ANY(:ids) AND h.period_start >= p.start_ts "
+            "AND h.period_start < p.end_ts GROUP BY p.n, h.machine_id"
+        ),
+        {
+            "n": list(range(len(spans))),
+            "starts": [s for s, _ in spans],
+            "ends": [e for _, e in spans],
+            "ids": list(machine_ids),
+        },
+    )
+    return {(r.n, r.machine_id): dict(r._mapping) for r in rows}

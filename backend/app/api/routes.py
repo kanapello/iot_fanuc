@@ -48,6 +48,7 @@ from app.core.access import (
 from app.ingest.health import find_seq_gaps
 from app.oee import service as oee
 from app.reports import cycles as cycle_reports
+from app.reports import overview as overview_report
 from app.reports import service as reports
 from app.timeline import service as timeline
 from app.worker.live import read_live
@@ -276,6 +277,37 @@ async def get_cycle_stats(
     start, end, _now = _range(start, end)
     found = await cycle_reports.stats(session, machines, start, end)
     return [row for row in found if program is None or row["program"] == program]
+
+
+@router.get("/overview", tags=["analytics"])
+async def get_overview(
+    scope: CurrentScope,
+    session: Session,
+    settings: SettingsDep,
+    machines: AnalyticsMachines,
+    period: Annotated[str, Query(pattern="^(shift|today|yesterday|7d|30d)$")] = "today",
+    site_id: int | None = None,
+) -> dict[str, Any]:
+    """Overview of one site: cards with the previous period and the usual level, output, downtime,
+    machines below their usual utilization, programs slower than the norm. Days and shifts are those of
+    the site's time zone; without ``site_id`` the site of the first reachable machine is taken."""
+    if site_id is None:
+        site_id = machines[0]["site_id"] if machines else None
+        if site_id is None:
+            raise NOT_FOUND
+    if site_id not in scope.visible_site_ids:
+        raise NOT_FOUND
+    site = next(s for s in (await admin.hierarchy(session))["sites"] if s["id"] == site_id)
+    node = {"org_id": site["org_id"], "site_id": site_id, "timezone": site["timezone"]}
+    return await overview_report.overview(
+        session,
+        node,
+        [m for m in machines if m["site_id"] == site_id],
+        period,
+        datetime.now(UTC),
+        settings.overview_utilization_drop_pp,
+        settings.overview_slow_cycle_pct,
+    )
 
 
 @router.get("/reports/pareto", tags=["analytics"])

@@ -109,27 +109,11 @@ def _with_codes(snapshot: MachineSnapshot) -> MachineSnapshot:
     )
 
 
-class SimulatorDriver:
-    """MachineDriver implementation backed by a scenario."""
+class _Plan:
+    """Where a scenario is at a moment of scenario time: the step, the part count, the loaded program."""
 
-    def __init__(
-        self,
-        scenario: Scenario,
-        *,
-        offset_s: float = 0.0,
-        time_scale: float = 1.0,
-        clock: Callable[[], float] = time.monotonic,
-        anchor: float | None = None,
-    ) -> None:
-        self._scenario = scenario
-        self._offset_s = offset_s
-        self._time_scale = time_scale
-        self._clock = clock
-        # Scenario time 0 is ``anchor`` on the given clock; None = the moment the driver is created.
-        # The collector anchors it to the Unix epoch on wall-clock time, so a restart continues
-        # the same simulated history instead of starting the scenario (and its counters) again.
-        self._t0 = clock() if anchor is None else anchor
-
+    def __init__(self, scenario: Scenario) -> None:
+        self.scenario = scenario
         steps = scenario.steps
         reset_indexes = [i for i, s in enumerate(steps) if s.state == "counter_reset"]
         self._loop_has_reset = bool(reset_indexes)
@@ -138,21 +122,10 @@ class SimulatorDriver:
         programs = [s.program for s in steps if s.program]
         self._loop_end_program = programs[-1] if programs else scenario.program
 
-    def connect(self) -> None:
-        step, *_ = self._locate()
-        if step.state == "offline":
-            raise DriverConnectionError("simulated machine is unreachable")
-
-    def disconnect(self) -> None:
-        return None
-
-    def scenario_time(self) -> float:
-        return (self._clock() - self._t0) * self._time_scale + self._offset_s
-
-    def _locate(self) -> tuple[Step, float, int, str, float]:
-        """Return (active step, scenario time, part count, loaded program, time into the step)."""
-        scenario = self._scenario
-        t = max(0.0, self.scenario_time())
+    def locate(self, t: float) -> tuple[Step, int, str, float]:
+        """(active step, part count, loaded program, time into the step) at scenario time ``t``."""
+        scenario = self.scenario
+        t = max(0.0, t)
         total = scenario.total_duration_s
         loops, rem = divmod(t, total) if scenario.loop else (0.0, min(t, total))
 
@@ -175,10 +148,69 @@ class SimulatorDriver:
             is_last = step is timed[-1]
             if rem < step.duration_s or is_last:
                 elapsed = min(rem, step.duration_s)
-                return step, t, count + _parts(step, elapsed), program, elapsed
+                return step, count + _parts(step, elapsed), program, elapsed
             count += _parts(step, step.duration_s)
             rem -= step.duration_s
         raise AssertionError("unreachable: scenario has a timed step")
+
+
+class SimulatorDriver:
+    """MachineDriver implementation backed by a scenario."""
+
+    def __init__(
+        self,
+        scenario: Scenario,
+        *,
+        offset_s: float = 0.0,
+        time_scale: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+        anchor: float | None = None,
+        recent: Scenario | None = None,
+        recent_since: float | None = None,
+    ) -> None:
+        """``recent``: another scenario followed from ``recent_since`` (a moment of ``clock``) on.
+
+        The part counter goes on from where the first scenario left it, so the switch makes no parts.
+        """
+        self._time_scale = time_scale
+        self._offset_s = offset_s
+        self._clock = clock
+        # Scenario time 0 is ``anchor`` on the given clock; None = the moment the driver is created.
+        # The collector anchors it to the Unix epoch on wall-clock time, so a restart continues
+        # the same simulated history instead of starting the scenario (and its counters) again.
+        self._t0 = clock() if anchor is None else anchor
+        self._plan = _Plan(scenario)
+        self._recent = _Plan(recent) if recent is not None and recent_since is not None else None
+        self._switch_t = 0.0
+        self._count_shift = 0
+        if self._recent is not None and recent_since is not None:
+            self._switch_t = self._scenario_time(recent_since)
+            _, before, *_ = self._plan.locate(self._switch_t)
+            _, after, *_ = self._recent.locate(self._switch_t)
+            self._count_shift = before - after
+
+    def connect(self) -> None:
+        step, *_ = self._locate()
+        if step.state == "offline":
+            raise DriverConnectionError("simulated machine is unreachable")
+
+    def disconnect(self) -> None:
+        return None
+
+    def _scenario_time(self, moment: float) -> float:
+        return (moment - self._t0) * self._time_scale + self._offset_s
+
+    def scenario_time(self) -> float:
+        return self._scenario_time(self._clock())
+
+    def _locate(self) -> tuple[Step, float, int, str, float]:
+        """Return (active step, scenario time, part count, loaded program, time into the step)."""
+        t = max(0.0, self.scenario_time())
+        if self._recent is not None and t >= self._switch_t:
+            step, count, program, elapsed = self._recent.locate(t)
+            return step, t, max(count + self._count_shift, 0), program, elapsed
+        step, count, program, elapsed = self._plan.locate(t)
+        return step, t, count, program, elapsed
 
     def read_snapshot(self) -> MachineSnapshot:
         return _with_codes(self._read())

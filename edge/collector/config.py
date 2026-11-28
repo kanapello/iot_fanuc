@@ -91,8 +91,28 @@ class SimulatorMachine(_MachineBase):
     offset_s: float = 0.0
     time_scale: float = Field(default=1.0, gt=0)
     # Demo history: on the very first start replay this many past hours with historical timestamps.
-    backfill_hours: float = Field(default=0.0, ge=0, le=72)
+    # At most 28 days: telemetry is compressed after 30 days and late data must not reach a compressed
+    # chunk (ARCHITECTURE.md 3.6). The history goes the usual way: buffer -> broker -> ingest.
+    backfill_hours: float = Field(default=0.0, ge=0, le=672)
+    # The last ``backfill_detail_hours`` are replayed with ``backfill_step_s``, the older part with
+    # ``backfill_long_step_s`` (not finer than 30 s: weeks of history at a fine step are too much data).
     backfill_step_s: float = Field(default=5.0, gt=0)
+    backfill_detail_hours: float = Field(default=72.0, ge=0, le=72)
+    backfill_long_step_s: float = Field(default=30.0, ge=30)
+    # Demo of a machine "worse than usual": from ``recent_hours`` before the first start on, the machine
+    # follows ``recent_profile`` (another scenario) instead of ``profile``. Off by default.
+    recent_profile: str | None = None
+    recent_hours: float = Field(default=0.0, ge=0, le=672)
+
+    def backfill_step(self, lag_s: float) -> float:
+        """Replay step at ``lag_s`` seconds before the present."""
+        return self.backfill_step_s if lag_s <= self.backfill_detail_hours * 3600 else self.backfill_long_step_s
+
+    @model_validator(mode="after")
+    def _recent_needs_hours(self) -> SimulatorMachine:
+        if (self.recent_profile is None) != (self.recent_hours == 0):
+            raise ValueError("recent_profile and recent_hours go together")
+        return self
 
 
 MachineConfig = Annotated[FanucFocasMachine | SimulatorMachine, Field(discriminator="driver")]

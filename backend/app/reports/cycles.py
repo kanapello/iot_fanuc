@@ -12,6 +12,7 @@ import math
 import statistics
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -77,32 +78,92 @@ def _summary(splits: Sequence[Any]) -> dict[str, Any]:
     }
 
 
+@dataclass(slots=True)
+class _Group:
+    """Cycles of one machine and one program in a period, split into machine time, part change and pauses."""
+
+    machine: dict[str, Any]
+    program: str | None
+    cycles: list[Cycle]
+    normal: list[Cycle]
+    threshold: float
+    fixed: float | None
+    splits: list[Any]
+    norms: NormTable
+
+
+async def _groups(
+    session: AsyncSession, machines: Sequence[dict[str, Any]], start: datetime, end: datetime
+) -> list[_Group]:
+    rows = await timeline.list_cycles(session, [m["id"] for m in machines], start, end)
+    by_key: dict[tuple[int, str | None], list[Cycle]] = defaultdict(list)
+    for row in rows:
+        by_key[(row["machine_id"], row["program"])].append(_cycle(row))
+    by_id = {m["id"]: m for m in machines}
+    norms: dict[int, NormTable] = {}
+    result = []
+    for (machine_id, program), cycles in sorted(by_key.items(), key=lambda g: (g[0][0], g[0][1] or "")):
+        machine = by_id[machine_id]
+        if machine_id not in norms:
+            norms[machine_id] = NormTable(await admin.cycle_norms(session, machine))
+        normal = [c for c in cycles if c.kind == NORMAL]
+        fixed = machine.get("cycle_pause_threshold_s")
+        threshold = pause_threshold([c.machine_s for c in normal], fixed)
+        result.append(
+            _Group(machine, program, cycles, normal, threshold, fixed, split(normal, threshold), norms[machine_id])
+        )
+    return result
+
+
+def _base(group: _Group, end: datetime) -> dict[str, Any]:
+    program, normal = group.program, group.normal
+    ratios = []
+    for c in normal:
+        per_part = group.norms.lookup(program, c.end)
+        if per_part:
+            ratios.append(c.machine_s / (per_part * c.parts))
+    return {
+        "machine_id": group.machine["id"],
+        "machine_name": group.machine["name"],
+        "program": program,
+        "total": len(group.cycles),
+        "setup": sum(1 for c in group.cycles if c.kind == "setup"),
+        "incomplete": sum(1 for c in group.cycles if c.kind == "incomplete"),
+        "parts": sum(c.parts for c in normal),
+        "threshold_s": group.threshold,
+        "threshold_auto": group.fixed is None,
+        **_summary(group.splits),
+        "pauses": sum(1 for s in group.splits if s.pause_s > 0),
+        "pause_s": sum(s.pause_s for s in group.splits),
+        "norm_per_part_s": group.norms.lookup(program, end),
+        "machine_per_part_median_s": _median([c.machine_s / c.parts for c in normal]),
+        "vs_norm": round(statistics.median(ratios), 3) if ratios else None,
+    }
+
+
+async def summaries(
+    session: AsyncSession, machines: Sequence[dict[str, Any]], start: datetime, end: datetime
+) -> list[dict[str, Any]]:
+    """Per machine and program: counts, medians and the norm, without histograms and breakdowns.
+
+    The light part of ``stats``: cheap enough for every machine over 30 days (the overview).
+    """
+    return [_base(group, end) for group in await _groups(session, machines, start, end)]
+
+
 async def stats(
     session: AsyncSession, machines: Sequence[dict[str, Any]], start: datetime, end: datetime
 ) -> list[dict[str, Any]]:
     """Per machine and program: counts, medians, histograms, interruptions, the norm; by shift and by day."""
-    rows = await timeline.list_cycles(session, [m["id"] for m in machines], start, end)
-    groups: dict[tuple[int, str | None], list[Cycle]] = defaultdict(list)
-    for row in rows:
-        groups[(row["machine_id"], row["program"])].append(_cycle(row))
-    by_id = {m["id"]: m for m in machines}
     result = []
-    for (machine_id, program), cycles in sorted(groups.items(), key=lambda g: (g[0][0], g[0][1] or "")):
-        machine = by_id[machine_id]
-        normal = [c for c in cycles if c.kind == NORMAL]
-        fixed = machine.get("cycle_pause_threshold_s")
-        threshold = pause_threshold([c.machine_s for c in normal], fixed)
-        splits = split(normal, threshold)
-        norms = NormTable(await admin.cycle_norms(session, machine))
-        ratios = []
-        for c in normal:
-            per_part = norms.lookup(program, c.end)
-            if per_part:
-                ratios.append(c.machine_s / (per_part * c.parts))
-        shifts = await oee.site_shifts(session, machine, start, end)
+    shifts_of: dict[int, list[Any]] = {}
+    for group in await _groups(session, machines, start, end):
+        machine, splits = group.machine, group.splits
+        if machine["id"] not in shifts_of:
+            shifts_of[machine["id"]] = await oee.site_shifts(session, machine, start, end)
         zone = ZoneInfo(machine["timezone"])
         by_shift, by_day = [], defaultdict(list)
-        for shift in shifts:
+        for shift in shifts_of[machine["id"]]:
             inside = [s for s in splits if shift.start <= s.cycle.end < shift.end]
             if inside:
                 by_shift.append({"name": shift.name, "start": shift.start, "end": shift.end, **_summary(inside)})
@@ -110,22 +171,8 @@ async def stats(
             by_day[s.cycle.end.astimezone(zone).date().isoformat()].append(s)
         result.append(
             {
-                "machine_id": machine_id,
-                "machine_name": machine["name"],
-                "program": program,
-                "total": len(cycles),
-                "setup": sum(1 for c in cycles if c.kind == "setup"),
-                "incomplete": sum(1 for c in cycles if c.kind == "incomplete"),
-                "parts": sum(c.parts for c in normal),
-                "threshold_s": threshold,
-                "threshold_auto": fixed is None,
-                **_summary(splits),
-                "pauses": sum(1 for s in splits if s.pause_s > 0),
-                "pause_s": sum(s.pause_s for s in splits),
-                "norm_per_part_s": norms.lookup(program, end),
-                "machine_per_part_median_s": _median([c.machine_s / c.parts for c in normal]),
-                "vs_norm": round(statistics.median(ratios), 3) if ratios else None,
-                "machine_hist": histogram([c.machine_s for c in normal]),
+                **_base(group, end),
+                "machine_hist": histogram([c.machine_s for c in group.normal]),
                 "load_hist": histogram([s.load_s for s in splits if s.pause_s == 0]),
                 "by_shift": by_shift,
                 "by_day": [{"day": day, **_summary(items)} for day, items in sorted(by_day.items())],

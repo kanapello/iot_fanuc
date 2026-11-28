@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     notify_interval_s: float = 10.0
     collector_offline_notify_minutes: int = 5
 
+    # Overview: a machine is listed as "below usual" when its utilization of the period is lower than
+    # its usual level by more than this many percentage points; a program is "slower than the norm"
+    # when the median machine time per part exceeds the cycle norm by more than this many percent.
+    overview_utilization_drop_pp: float = 10.0
+    overview_slow_cycle_pct: float = 10.0
+
 
 @lru_cache
 def get_settings() -> Settings:
