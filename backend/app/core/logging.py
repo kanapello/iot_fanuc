@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 
@@ -30,3 +31,25 @@ def setup_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+
+
+_TOKEN = re.compile(r"(token=)[^&\s\"']+")
+
+
+class MaskTokens(logging.Filter):
+    """Hides ``token=...`` in log records: kiosks, TV dashboards and every /ws/live connection carry a token
+    in the query of the address, and uvicorn writes the address of each request and WebSocket."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _TOKEN.sub(r"\1***", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(_TOKEN.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
+        return True
+
+
+def mask_tokens(*logger_names: str) -> None:
+    for name in logger_names:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, MaskTokens) for f in logger.filters):
+            logger.addFilter(MaskTokens())

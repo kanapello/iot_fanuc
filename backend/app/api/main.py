@@ -19,7 +19,7 @@ from app.api import geometry_routes, passport_routes, profile_routes, repairs_ro
 from app.api.security import SecurityHeadersMiddleware
 from app.core.config import checked_settings
 from app.core.db import create_engine, create_session_factory
-from app.core.logging import setup_logging
+from app.core.logging import mask_tokens, setup_logging
 from app.geometry import demo as geometry_demo
 from app.repairs import demo as repairs_demo
 from app.worker.live import live_channel, read_live
@@ -31,6 +31,8 @@ log = logging.getLogger("app.api")
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = checked_settings()
     setup_logging(settings.log_level)
+    # uvicorn logs the address of every request and WebSocket, with ?token= of kiosks and /ws/live
+    mask_tokens("uvicorn.access", "uvicorn.error")
     engine = create_engine(settings.database_url)
     app.state.settings = settings
     app.state.session_factory = create_session_factory(engine)
