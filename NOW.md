@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 1 | `feat/cloud-deploy` | Облачная VM: HTTPS (Caddy), MQTT по TLS, отказ старта со значениями по умолчанию, ограничение входа, заголовки, бэкапы в S3 | слито (#18), `docs/cloud-deploy-report.md`, `docs/runbooks/cloud-install.md` |
 | 2 | `feat/notifications` | Уведомления в Telegram: аварии, коллекторы, простои без причины, заявки, ТО | слито (#19), `docs/notifications-report.md` |
-| 3 | `feat/overview-dashboard` | Главный экран-сводка предприятия и меню слева; 21 день демо-истории в симуляторе (ADR 0012) | PR #21, `docs/overview-report.md` |
+| 3 | `feat/overview-dashboard` | Главный экран-сводка предприятия и меню слева; 21 день демо-истории в симуляторе (ADR 0012) | слито (#21), `docs/overview-report.md` |
 
 Дальше — установка на облачную VM и первая реальная стойка (раздел «Ждёт владельца проекта»).
 
