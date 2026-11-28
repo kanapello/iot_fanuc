@@ -494,6 +494,11 @@ async def state_seconds(
     """Seconds per state of each machine inside each span: {(span index, machine): {state: seconds}}.
 
     One query for any number of spans; an open interval lasts until ``now``.
+
+    Relies on the intervals of one machine never overlapping (``_store_intervals`` keeps them a chain):
+    for a span, only the intervals that start inside it and the single last one that starts before it
+    can cover it. Both are found through the index (machine_id, start_ts) without reading the history
+    before the span, so the time does not grow with the age of the installation.
     """
     if not machine_ids or not spans:
         return {}
@@ -503,8 +508,14 @@ async def state_seconds(
             "- GREATEST(i.start_ts, p.start_ts))) AS seconds "
             "FROM unnest(CAST(:n AS integer[]), CAST(:starts AS timestamptz[]), CAST(:ends AS timestamptz[])) "
             "AS p(n, start_ts, end_ts) "
-            "JOIN state_intervals i ON i.machine_id = ANY(:ids) AND i.start_ts < p.end_ts "
-            "AND COALESCE(i.end_ts, :now) > p.start_ts "
+            "CROSS JOIN unnest(CAST(:ids AS bigint[])) AS mm(id) "
+            "CROSS JOIN LATERAL ("
+            "(SELECT machine_id, state, start_ts, end_ts FROM state_intervals "
+            "WHERE machine_id = mm.id AND start_ts < p.start_ts ORDER BY start_ts DESC LIMIT 1) "
+            "UNION ALL "
+            "(SELECT machine_id, state, start_ts, end_ts FROM state_intervals "
+            "WHERE machine_id = mm.id AND start_ts >= p.start_ts AND start_ts < p.end_ts)) i "
+            "WHERE COALESCE(i.end_ts, :now) > p.start_ts "
             "GROUP BY p.n, i.machine_id, i.state"
         ),
         {**_span_params(spans), "ids": list(machine_ids), "now": now},

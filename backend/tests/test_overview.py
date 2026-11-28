@@ -192,3 +192,75 @@ async def test_below_usual_and_slower_than_norm_follow_their_thresholds(
 
     relaxed = await run(session_factory, site, "today", drop_pp=20, slow_pct=30)
     assert relaxed["below_usual"] == [] and relaxed["slow_cycles"] == []
+
+
+# the query state_seconds used before: reads the whole history of a machine up to the end of each span
+_REFERENCE = """
+SELECT p.n, i.machine_id, i.state, sum(EXTRACT(EPOCH FROM LEAST(COALESCE(i.end_ts, :now), p.end_ts)
+       - GREATEST(i.start_ts, p.start_ts))) AS seconds
+FROM unnest(CAST(:n AS integer[]), CAST(:starts AS timestamptz[]), CAST(:ends AS timestamptz[]))
+     AS p(n, start_ts, end_ts)
+JOIN state_intervals i ON i.machine_id = ANY(:ids) AND i.start_ts < p.end_ts AND COALESCE(i.end_ts, :now) > p.start_ts
+GROUP BY p.n, i.machine_id, i.state
+"""
+
+
+async def test_state_seconds_reads_only_what_covers_the_span(session_factory: Factory) -> None:
+    """Intervals starting inside a span plus the last one before it give what the full scan gives:
+    an open interval, an interval longer than the span, a span before the history, a span after it."""
+    seed = await seed_reference(session_factory)
+    other = await add_machine(session_factory, seed, "m2")
+    h = timedelta(hours=1)
+    t0 = NOW - 48 * h
+    chains = {
+        seed.machine_id: [
+            ("STOP", t0, t0 + 2 * h),
+            ("RUN", t0 + 2 * h, t0 + 30 * h),
+            ("IDLE", t0 + 30 * h, t0 + 31 * h),
+        ]
+        + [("RUN" if k % 2 else "STOP", t0 + (31 + k) * h, t0 + (32 + k) * h) for k in range(15)]
+        + [("RUN", t0 + 46 * h, None)],  # open until now
+        other["id"]: [("OFFLINE", t0 + 10 * h, t0 + 11 * h), ("RUN", t0 + 11 * h, t0 + 12 * h)],  # history ends early
+    }
+    async with session_factory() as session, session.begin():
+        for machine_id, chain in chains.items():
+            for state, start, end in chain:
+                await session.execute(
+                    text(
+                        "INSERT INTO state_intervals (machine_id, state, start_ts, end_ts, rules_version) "
+                        "VALUES (:m, :s, :a, :b, 1)"
+                    ),
+                    {"m": machine_id, "s": state, "a": start, "b": end},
+                )
+    spans = [
+        (t0 - 5 * h, t0 - 2 * h),  # before any history
+        (t0 + 5 * h, t0 + 6 * h),  # inside one interval that is much longer than the span
+        (t0 + h, t0 + 33 * h + timedelta(minutes=17)),  # across many intervals
+        (t0 + 31 * h + timedelta(minutes=30), t0 + 32 * h + timedelta(minutes=30)),  # across a border
+        (t0 + 46 * h + timedelta(minutes=5), NOW),  # inside the open interval
+        (NOW - 3 * h, NOW + 2 * h),  # reaches into the future
+        *[(t0 + k * h, t0 + (k + 1) * h) for k in range(48)],  # every hour
+    ]
+    ids = list(chains)
+    async with session_factory() as session:
+        found = await timeline.state_seconds(session, ids, spans, NOW)
+        rows = await session.execute(
+            text(_REFERENCE),
+            {
+                "n": list(range(len(spans))),
+                "starts": [s for s, _ in spans],
+                "ends": [e for _, e in spans],
+                "ids": ids,
+                "now": NOW,
+            },
+        )
+    expected: dict[tuple[int, int], dict[str, float]] = {}
+    for r in rows:
+        expected.setdefault((r.n, r.machine_id), {})[r.state] = max(float(r.seconds), 0.0)
+    assert found == expected
+    assert (0, seed.machine_id) not in found and (1, seed.machine_id) in found
+    assert found[(1, seed.machine_id)] == {"RUN": 3600.0}
+    assert found[(4, seed.machine_id)]["RUN"] == pytest.approx(
+        (NOW - (t0 + 46 * h + timedelta(minutes=5))).total_seconds()
+    )
+    assert (4, other["id"]) not in found  # after the end of its history: nothing, not an error

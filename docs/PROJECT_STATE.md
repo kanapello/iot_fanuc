@@ -99,7 +99,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml --profile dev up -d 
 | #20 | Эта сводка (`docs/PROJECT_STATE.md`) и правило в `CLAUDE.md` обновлять её в конце каждой задачи |
 | #21 | Главный экран-сводка (`/`, `GET /overview`), меню слева, «Станки» в каркасе; симулятор — 21 день истории и «ухудшение» у трёх станков (ADR 0012). В работе (черновик) |
 
-Цифры на ветке PR #21: миграции `0001`–`0012` (сводка новых не добавила); тесты backend 119, edge 43 (PostgreSQL + TimescaleDB, Mosquitto и
+Цифры на ветке PR #21: миграции `0001`–`0012` (сводка новых не добавила); тесты backend 120, edge 43 (PostgreSQL + TimescaleDB, Mosquitto и
 Redis в testcontainers); `make up` поднимается с нуля на чистых томах, демо-история (21 день) догоняется за ~9 минут. В `CHANGELOG.md`
 изменения #15–#21 — в
 разделе «Не выпущено».
