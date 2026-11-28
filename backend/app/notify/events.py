@@ -12,6 +12,9 @@ from urllib.parse import quote
 class EventType:
     roles: frozenset[str]  # who gets it: a role granted on the node of the subject (a machine, a site)
     restores: bool  # its end is announced too ("восстановлено")
+    # about the whole installation, not a customer's node: the service (granted on no organization)
+    # and the superadmin get it
+    installation: bool = False
 
 
 EVENT_TYPES: dict[str, EventType] = {
@@ -23,6 +26,7 @@ EVENT_TYPES: dict[str, EventType] = {
     "repair_new": EventType(frozenset({"service"}), False),
     "repair_status": EventType(frozenset({"admin", "master"}), False),
     "maintenance_due": EventType(frozenset({"service"}), False),
+    "backup": EventType(frozenset({"service"}), True, installation=True),  # nightly backup, restore check
 }
 
 WARNINGS = {2: "низкий заряд батареи", 3: "неисправность вентилятора"}
@@ -37,9 +41,9 @@ STATES = {
 }
 
 
-def eligible_types(roles: set[str]) -> list[str]:
+def eligible_types(roles: set[str], superadmin: bool = False) -> list[str]:
     """Event types a holder of these roles gets (and can switch off in the profile)."""
-    return [name for name, event in EVENT_TYPES.items() if event.roles & roles]
+    return [name for name, event in EVENT_TYPES.items() if event.roles & roles or (superadmin and event.installation)]
 
 
 def _link(base_url: str | None, path: str) -> str:
@@ -103,6 +107,30 @@ def maintenance_due(plan: dict[str, Any], machine: dict[str, Any], base_url: str
     remaining = plan["remaining_hours"]
     when = f"осталось {remaining:.0f} ч наработки" if remaining > 0 else f"просрочено на {-remaining:.0f} ч наработки"
     return f"🗓 Подходит ТО «{plan['name']}» — {machine_title(machine)}: {when}" + _link(base_url, "/repairs")
+
+
+def _ago(moment: datetime, now: datetime) -> str:
+    hours = (now - moment).total_seconds() / 3600
+    return f"{hours:.0f} ч назад" if hours >= 1 else "меньше часа назад"
+
+
+def backup_failed(kind: str, run: dict[str, Any]) -> str:
+    what = "Ночной бэкап базы" if kind == "backup" else "Проверка восстановления бэкапа (restore-check)"
+    reason = f"\n{run['message']}" if run.get("message") else ""
+    return f"💾 {what} завершился ошибкой{reason}\nЖурнал: make prod-logs s=backup"
+
+
+def backup_stale(last_good: dict[str, Any] | None, hours: float, now: datetime) -> str:
+    when = f"последний — {_ago(last_good['finished_at'], now)}" if last_good else "ни одного успешного"
+    return f"💾 Нет успешного бэкапа базы больше {hours:.0f} ч ({when})\nЖурнал: make prod-logs s=backup"
+
+
+def backup_restored(kind: str) -> str:
+    if kind == "restore_check":
+        return "✅ Восстановлено: проверка восстановления бэкапа прошла"
+    if kind == "stale":
+        return "✅ Восстановлено: свежий бэкап базы есть"
+    return "✅ Восстановлено: ночной бэкап базы выполнен"
 
 
 def restored(event_type: str, subject: dict[str, Any], detail: str | None = None) -> str:

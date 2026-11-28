@@ -26,7 +26,7 @@ def _user_id(scope: Scope) -> int:
 
 
 def _types(scope: Scope) -> list[str]:
-    return eligible_types({g.role for g in scope.grants})
+    return eligible_types({g.role for g in scope.grants}, scope.superadmin)
 
 
 @router.get("/telegram")

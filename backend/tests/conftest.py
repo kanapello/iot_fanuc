@@ -122,7 +122,7 @@ async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessio
             text(
                 "TRUNCATE organizations, users, telemetry, machine_events, ingest_rejects, state_intervals, "
                 "part_events, timeline_dirty, oee_dirty, oee_hourly, oee_shift, notification_conditions, "
-                "notification_cursors RESTART IDENTITY CASCADE"
+                "notification_cursors, backup_runs RESTART IDENTITY CASCADE"
             )
         )
     return create_session_factory(engine)

@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.admin import identity, journal
+from app.admin import backups, identity, journal
 from app.admin import service as admin
 from app.core.access import MACHINE_VIEW, Scope
 from app.core.config import Settings
@@ -65,6 +65,17 @@ class Recipients:
             and scope.roles_on_machine(machine_id) & roles
         ]
 
+    def for_installation(self, event_type: str) -> list[int]:
+        """The superadmin and roles of the event type granted on no organization (the service)."""
+        roles = events.EVENT_TYPES[event_type].roles
+        return [
+            scope.user_id
+            for scope, muted in self._users
+            if scope.user_id is not None
+            and event_type not in muted
+            and (scope.superadmin or any(g.role in roles and g.org_id is None for g in scope.grants))
+        ]
+
     def for_site(self, event_type: str, site_id: int) -> list[int]:
         roles = events.EVENT_TYPES[event_type].roles
         return [
@@ -108,6 +119,7 @@ class Notifier:
             ("machines", lambda s: self._machines(s, active, recipients, now)),
             ("collectors", lambda s: self._collectors(s, recipients, now)),
             ("repairs", lambda s: self._repairs(s, {m["id"]: m for m in machines}, recipients, now)),
+            ("backups", lambda s: self._backups(s, recipients, now)),
         ]
         if check_maintenance:
             self._maintenance_at = now
@@ -258,6 +270,30 @@ class Notifier:
                 session, "maintenance_due", f"plan:{plan['id']}", plan["status"] in ("soon", "due"), now,
                 partial(recipients.for_machine, "maintenance_due", machine["id"]),
                 partial(events.maintenance_due, plan, machine, base),
+            )  # fmt: skip
+
+    async def _backups(self, session: AsyncSession, recipients: Recipients, now: datetime) -> None:
+        """The last nightly backup or restore check failed; no successful backup for too long.
+
+        Nothing is said where the backup container never reported (development, a server without it).
+        """
+        runs = await backups.latest(session)
+        who = partial(recipients.for_installation, "backup")
+        for kind in ("backup", "restore_check"):
+            run = runs[kind]
+            if run is None:
+                continue
+            await self._watch(
+                session, "backup", f"backup:{kind}", not run["ok"], now, who,
+                partial(events.backup_failed, kind, run), partial(events.backup_restored, kind),
+            )  # fmt: skip
+        if runs["backup"] is not None:
+            hours = self._settings.backup_stale_hours
+            good = runs["last_good_backup"]
+            stale = good is None or now - good["finished_at"] > timedelta(hours=hours)
+            await self._watch(
+                session, "backup", "backup:stale", stale, now, who,
+                partial(events.backup_stale, good, hours, now), partial(events.backup_restored, "stale"),
             )  # fmt: skip
 
     # ---------------------------------------------------------------- sending

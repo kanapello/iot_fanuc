@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     notify_repeat_minutes: int = 15
     notify_interval_s: float = 10.0
     collector_offline_notify_minutes: int = 5
+    # no successful backup for longer than this: the service and the superadmin are told
+    backup_stale_hours: float = 26.0
 
     # Overview: a machine is listed as "below usual" when its utilization of the period is lower than
     # its usual level by more than this many percentage points; a program is "slower than the norm"

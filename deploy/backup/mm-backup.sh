@@ -11,6 +11,9 @@
 #                                     restores into the throwaway database on $MM_RESTORE_CHECK_HOST
 #                                     and compares it with the live one
 #
+# Every backup and restore check writes its result to the table backup_runs of the database; the worker
+# tells the service and the superadmin in Telegram about a failure and about no fresh backup (ADR 0011).
+#
 # Connection: PGHOST, PGUSER, PGPASSWORD, PGDATABASE. Storage: MM_BACKUP_S3_ENDPOINT,
 # MM_BACKUP_S3_REGION, MM_BACKUP_S3_BUCKET, MM_BACKUP_S3_ACCESS_KEY, MM_BACKUP_S3_SECRET_KEY,
 # MM_BACKUP_S3_PREFIX. The bucket must exist; keys need list, read, write and delete.
@@ -29,7 +32,32 @@ REMOTE="s3:$MM_BACKUP_S3_BUCKET/$MM_BACKUP_S3_PREFIX"
 WORK=/work
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup: $*"; }
-fail() { log "ERROR: $*" >&2; exit 1; }
+fail() {
+    log "ERROR: $*" >&2
+    echo "$*" > "$WORK/last-error" 2>/dev/null || true  # the reason goes into backup_runs
+    exit 1
+}
+
+record() {  # KIND OK MESSAGE: the result of a run, for the notifications of the worker
+    # psql expands :'variables' only in what it reads, not in -c
+    echo "INSERT INTO backup_runs (kind, ok, message) VALUES (:'kind', :'ok', :'message')" |
+        psql -q -X -v ON_ERROR_STOP=1 -v kind="$1" -v ok="$2" -v message="$3" > /dev/null 2>&1 ||
+        log "WARNING: the result could not be written to the database (no notification about it)" >&2
+}
+
+recorded() {  # KIND COMMAND [ARGS]: runs the command in a fresh shell (set -e works there), records the result
+    kind=$1
+    shift
+    rm -f "$WORK/last-error"
+    status=0
+    MM_BACKUP_INNER=1 "$0" "$@" || status=$?
+    if [ "$status" -eq 0 ]; then
+        record "$kind" true ""
+    else
+        record "$kind" false "$(cat "$WORK/last-error" 2> /dev/null || echo "exit status $status")"
+    fi
+    return "$status"
+}
 
 require_storage() {
     missing=""
@@ -50,12 +78,13 @@ backup() {
     pg_dump --format=custom --compress=6 --file="$file" "$PGDATABASE" || fail "pg_dump failed"
     pg_restore --list "$file" > /dev/null || fail "the dump is not readable"
     size=$(wc -c < "$file" | tr -d ' ')
-    rclone copyto "$file" "$REMOTE/$name"
+    rclone copyto "$file" "$REMOTE/$name" || fail "upload to $REMOTE failed"
     log "uploaded $REMOTE/$name ($size bytes)"
     rm -f "$file"
     trap - EXIT
     # after a successful upload only: the newest copy always stays
-    rclone delete --min-age "${MM_BACKUP_KEEP_DAYS}d" --include "*.dump" "$REMOTE/"
+    rclone delete --min-age "${MM_BACKUP_KEEP_DAYS}d" --include "*.dump" "$REMOTE/" ||
+        fail "uploaded, but old copies could not be removed"
     log "copies older than $MM_BACKUP_KEEP_DAYS days removed"
 }
 
@@ -67,12 +96,13 @@ seconds_until_next_run() {
 }
 
 schedule() {
-    require_storage
     seconds_until_next_run > /dev/null
+    # not configured: every night records a failure, so the service is told instead of a silent restart loop
+    (require_storage) || log "WARNING: backups are not configured; every night will be recorded as failed" >&2
     log "nightly backups at $MM_BACKUP_TIME UTC to $REMOTE, kept $MM_BACKUP_KEEP_DAYS days"
     while true; do
         sleep "$(seconds_until_next_run)"
-        if (backup); then log "nightly backup done"; else log "ERROR: nightly backup FAILED" >&2; fi
+        if recorded backup backup; then log "nightly backup done"; else log "ERROR: nightly backup FAILED" >&2; fi
     done
 }
 
@@ -154,9 +184,11 @@ command=${1:-schedule}
 [ "$#" -gt 0 ] && shift
 case "$command" in
     schedule) schedule ;;
-    backup) backup ;;
+    # run by hand (make backup-now, make restore-check) or by the schedule: the result is recorded
+    backup) if [ -n "${MM_BACKUP_INNER:-}" ]; then backup; else recorded backup backup; fi ;;
     list) list ;;
     restore) restore "$@" ;;
-    restore-check) restore_check "$@" ;;
+    restore-check)
+        if [ -n "${MM_BACKUP_INNER:-}" ]; then restore_check "$@"; else recorded restore_check restore-check "$@"; fi ;;
     *) fail "unknown command '$command' (schedule, backup, list, restore, restore-check)" ;;
 esac
