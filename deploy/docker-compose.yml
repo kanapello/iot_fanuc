@@ -168,6 +168,7 @@ services:
   simulator-b:
     profiles: ["dev"]
     image: machine-monitor/edge:dev
+    pull_policy: never  # built locally by simulator-a: not to be looked up in a registry
     restart: unless-stopped
     command: ["python", "-m", "collector.main", "--config", "/app/config.sim.b.yaml"]
     environment:
