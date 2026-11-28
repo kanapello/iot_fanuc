@@ -298,6 +298,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | `notification_conditions` | event_type, subject (`machine:12`, `collector:…`, `request:7`, `plan:5`), active, since, announced, announced_at — антиспам и «восстановлено» |
 | `notification_outbox` | очередь: user_id, event_type, subject, text, attempts, next_attempt_at, sent_at, failed_at, last_error |
 | `notification_cursors` | позиции в истории заявок и в `getUpdates` бота |
+| `backup_runs` | kind (`backup` / `restore_check`), ok, finished_at, message — результат каждого бэкапа и проверки восстановления; пишет контейнер `backup`, только INSERT |
 
 `operator` — текстовое поле; табельный номер и PIN оператора — отдельным этапом. Время реакции и
 восстановления заявок и наработка по регламентам не хранятся — вычисляются по таймлайну при чтении (п. 6.5).
@@ -427,7 +428,9 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 - События и получатели по умолчанию: авария (`alarm_code` 1) — мастер участка и сервис; батарея и вентилятор
   (`alarm_code` 2, 3) — сервис; коллектор не на связи дольше 5 мин и потерянный буфер — сервис и администратор
   организации; STOP без причины дольше `areas.stop_alert_minutes` — мастер участка; новая заявка — сервис; смена
-  статуса заявки — администратор и мастер; ТО «скоро» или «пора» — сервис. Пользователь выключает типы в профиле.
+  статуса заявки — администратор и мастер; ТО «скоро» или «пора» — сервис; ночной бэкап или restore-check с ошибкой
+  и нет успешного бэкапа дольше `MM_BACKUP_STALE_HOURS` (26 ч) — сервис и суперадмин (по `backup_runs`; где
+  контейнер `backup` ни разу не отчитался, молчит). Пользователь выключает типы в профиле.
   Только по станкам и площадкам его области доступа: она строится так же, как для запросов к API
   (`identity.user_scope`), плюс роль, выданная на узле предмета события.
 - Антиспам: одно событие предмета — не чаще раза в `MM_NOTIFY_REPEAT_MINUTES` (15) мин; конец объявленного
@@ -535,7 +538,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
 | Сервис | Образ | Назначение |
 |---|---|---|
 | `caddy` | caddy:2.11.9-alpine | HTTPS для `MM_DOMAIN` (Let's Encrypt, продление само), 80 → 443; `/api/*`, `/ws/*` — в API, остальное — в `web` |
-| `backup` | `deploy/backup/Dockerfile` (TimescaleDB 2.32.0-pg16 + rclone 1.76.0) | ночной `pg_dump` в S3-совместимое хранилище, хранение 30 дней; `make backup-now`, `restore`, `restore-check` |
+| `backup` | `deploy/backup/Dockerfile` (TimescaleDB 2.32.0-pg16 + rclone 1.76.0) | ночной `pg_dump` в S3-совместимое хранилище, хранение 30 дней; `make backup-now`, `restore`, `restore-check`; результат — в `backup_runs` (уведомление при ошибке) |
 | `restore-check-db` | timescale/timescaledb:2.32.0-pg16, профиль `tools` | временная чистая база для `make restore-check` |
 
 Наружу в prod — только 80 и 443 (Caddy) и 8883 (Mosquitto, TLS). «Демо-предприятие» миграций удаляется
@@ -554,6 +557,7 @@ QoS 1, `retain=false` (кроме heartbeat — `retain=true`). Схемы — `
   API, web и 1883 — только внутри сети compose.
 - Необходимый минимум (ADR 0010): отказ старта со значениями паролей из `.env.example`, ограничение попыток входа,
   заголовки безопасности, токен киоска убирается из адресной строки, ночные бэкапы с проверкой восстановления.
+  Токены не попадают в журналы: nginx пишет путь без параметров (`$uri`), uvicorn маскирует `token=`.
 - Секреты — в `.env` / переменных окружения, не в git.
 - Изоляция клиентов — фильтром по области доступа в API. Row-level security в БД, журнал входов сервисных
   инженеров и согласие клиента на доступ сервиса не делаются на этом этапе.
