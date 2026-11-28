@@ -30,6 +30,8 @@ x-backend: &backend
     MM_TELEGRAM_BOT_TOKEN: ${MM_TELEGRAM_BOT_TOKEN:-}
     MM_TELEGRAM_BOT_USERNAME: ${MM_TELEGRAM_BOT_USERNAME:-}
     MM_NOTIFY_REPEAT_MINUTES: ${MM_NOTIFY_REPEAT_MINUTES:-15}
+    # no successful backup for longer than this: the service and the superadmin are told
+    MM_BACKUP_STALE_HOURS: ${MM_BACKUP_STALE_HOURS:-26}
 
 services:
   mosquitto:
@@ -168,6 +170,7 @@ services:
   simulator-b:
     profiles: ["dev"]
     image: machine-monitor/edge:dev
+    pull_policy: never  # built locally by simulator-a: not to be looked up in a registry
     restart: unless-stopped
     command: ["python", "-m", "collector.main", "--config", "/app/config.sim.b.yaml"]
     environment:

@@ -206,3 +206,22 @@ async def test_every_response_has_the_security_headers() -> None:
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
     }
+
+
+def test_tokens_are_masked_in_the_logs_of_uvicorn(caplog: pytest.LogCaptureFixture) -> None:
+    """The WebSocket line of uvicorn carries the address with ?token=: the filter hides the value."""
+    import logging
+
+    from app.core.logging import mask_tokens
+
+    mask_tokens("uvicorn.error", "uvicorn.access")
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("uvicorn.error").info(
+            '%s - "WebSocket %s" [accepted]', "10.0.0.5:5000", "/ws/live?token=eyJsecret.part&x=1"
+        )
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d', "10.0.0.5:5000", "GET", "/dashboard/1?token=dev_secret", "1.1", 200
+        )
+    text = caplog.text
+    assert "secret" not in text
+    assert "/ws/live?token=***&x=1" in text and "/dashboard/1?token=***" in text

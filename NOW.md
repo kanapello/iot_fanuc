@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 1 | `feat/cloud-deploy` | Облачная VM: HTTPS (Caddy), MQTT по TLS, отказ старта со значениями по умолчанию, ограничение входа, заголовки, бэкапы в S3 | слито (#18), `docs/cloud-deploy-report.md`, `docs/runbooks/cloud-install.md` |
 | 2 | `feat/notifications` | Уведомления в Telegram: аварии, коллекторы, простои без причины, заявки, ТО | слито (#19), `docs/notifications-report.md` |
-| 3 | `feat/overview-dashboard` | Главный экран-сводка предприятия и меню слева; 21 день демо-истории в симуляторе (ADR 0012) | PR #21, `docs/overview-report.md` |
+| 3 | `feat/overview-dashboard` | Главный экран-сводка предприятия и меню слева; 21 день демо-истории в симуляторе (ADR 0012) | слито (#21), `docs/overview-report.md` |
 
 Дальше — установка на облачную VM и первая реальная стойка (раздел «Ждёт владельца проекта»).
 
@@ -33,6 +33,7 @@
 | Осторожный опрос первой стойки | #15 | `docs/probe-recon-report.md` |
 | Разделение цикла | #16 | `docs/cycle-split-report.md` |
 | QR-паспорт станка | #17 | `docs/qr-passport-report.md` |
+| Токены вне журналов, уведомления о бэкапах, `pull_policy` симулятора | #22 | `docs/small-fixes-report.md` |
 
 ## Ждёт владельца проекта
 
@@ -53,7 +54,7 @@
   разделения цикла — тот же раздел в `docs/cycle-split-report.md`; QR-паспорта — в `docs/qr-passport-report.md`
   (в том числе: оператор по наклейке попадает на экран оператора); облачного развёртывания — в
   `docs/cloud-deploy-report.md`; уведомлений — в `docs/notifications-report.md` (в том числе: технолог и оператор
-  уведомлений не получают); сводки — в `docs/overview-report.md`.
+  уведомлений не получают); сводки — в `docs/overview-report.md`; мелких правок — в `docs/small-fixes-report.md`.
 - **Адрес для QR-наклеек.** В prod (`make prod-up`) он берётся из `MM_DOMAIN`; на сервере за чужим HTTPS-прокси
   задать `MM_PUBLIC_URL` до печати наклеек: ссылка печатается в QR и меняется только перепечаткой.
 

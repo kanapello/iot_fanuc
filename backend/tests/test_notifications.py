@@ -430,7 +430,7 @@ async def test_event_types_of_the_profile(plant: Plant, session_factory: Factory
     service = await login(session_factory, "service")
     async with client(service) as http:
         names = [t["type"] for t in (await http.get("/profile/notifications")).json()]
-    assert names == ["alarm", "warning", "collector_offline", "buffer_lost", "repair_new", "maintenance_due"]
+    assert names == ["alarm", "warning", "collector_offline", "buffer_lost", "repair_new", "maintenance_due", "backup"]
     operator = await login(session_factory, "operator_a")
     async with client(operator) as http:
         assert (await http.get("/profile/notifications")).json() == []
@@ -439,3 +439,66 @@ async def test_event_types_of_the_profile(plant: Plant, session_factory: Factory
         _, kiosk = await identity.issue_device_token(session, "kiosk", plant.a.machine_id, None, None)
     async with client(kiosk) as http:
         assert (await http.get("/profile/telegram")).status_code == 403  # devices have no profile
+
+
+# ---------------------------------------------------------------- backups
+
+
+async def backup_run(factory: Factory, kind: str, ok: bool, at: datetime, message: str = "") -> None:
+    """What deploy/backup/mm-backup.sh writes after a run."""
+    await sql(
+        factory,
+        "INSERT INTO backup_runs (kind, ok, finished_at, message) VALUES (:k, :ok, :at, :m)",
+        k=kind, ok=ok, at=at, m=message,
+    )  # fmt: skip
+
+
+async def test_backups_go_to_the_service_and_the_superadmin(plant: Plant, session_factory: Factory) -> None:
+    async with session_factory() as session:
+        superadmin = await identity.login(session, SETTINGS, SETTINGS.admin_username, SETTINGS.admin_password)
+    assert superadmin is not None
+    async with session_factory() as session, session.begin():
+        user_id = (
+            await session.execute(text("SELECT id FROM users WHERE login = :l"), {"l": SETTINGS.admin_username})
+        ).scalar_one()
+        await session.execute(text("INSERT INTO telegram_chats (user_id, chat_id) VALUES (:u, 2000)"), {"u": user_id})
+    plant.chats[2000] = "superadmin"
+    async with client(superadmin) as http:  # the superadmin can switch it off like any other type
+        assert [t["type"] for t in (await http.get("/profile/notifications")).json()] == ["backup"]
+
+    # the backup container never reported (development): nothing is said, however long
+    assert await plant.round(T0) == set()
+
+    # a nightly backup failed: the service and the superadmin, nobody of the customers
+    await backup_run(session_factory, "backup", True, T0 - timedelta(hours=25))
+    await backup_run(session_factory, "backup", False, T0 - timedelta(minutes=5), "upload to s3:mm failed")
+    assert await plant.round(T0) == {"service", "superadmin"}
+    assert "Ночной бэкап базы завершился ошибкой\nupload to s3:mm failed" in plant.texts()[-1]
+    assert await plant.round(T0 + timedelta(minutes=1)) == set()  # the same failure is not repeated
+
+    # still no good backup 26 hours after the last one: one more message, about the age
+    later = T0 + timedelta(hours=1, minutes=10)
+    assert await plant.round(later) == {"service", "superadmin"}
+    assert "Нет успешного бэкапа базы больше 26 ч" in plant.texts()[-1]
+
+    # the next night succeeds: both conditions are restored
+    await backup_run(session_factory, "backup", True, later + timedelta(minutes=1))
+    before = len(plant.texts())
+    assert await plant.round(later + timedelta(minutes=2)) == {"service", "superadmin"}
+    restored = plant.texts()[before:]
+    assert sum("ночной бэкап базы выполнен" in t for t in restored) == 2  # one per recipient
+    assert sum("свежий бэкап базы есть" in t for t in restored) == 2
+
+    # a restore check that fails, then passes
+    await backup_run(session_factory, "restore_check", False, later + timedelta(minutes=3), "pg_restore failed")
+    assert await plant.round(later + timedelta(minutes=4)) == {"service", "superadmin"}
+    assert "restore-check" in plant.texts()[-1]
+    await backup_run(session_factory, "restore_check", True, later + timedelta(minutes=30))
+    assert await plant.round(later + timedelta(minutes=31)) == {"service", "superadmin"}
+    assert "проверка восстановления бэкапа прошла" in plant.texts()[-1]
+
+    # switched off in the profile: the superadmin is not told any more
+    async with client(superadmin) as http:
+        assert (await http.put("/profile/notifications", json={"enabled": {"backup": False}})).status_code == 200
+    await backup_run(session_factory, "backup", False, later + timedelta(hours=3), "pg_dump failed")
+    assert await plant.round(later + timedelta(hours=3, minutes=1)) == {"service"}
